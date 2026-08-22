@@ -1,4 +1,6 @@
 export * from "./config.js";
+export * from "./delivery.js";
+export * from "./exporter.js";
 export * from "./console-exporter.js";
 export * from "./exporter.js";
 export * from "./helpers.js";

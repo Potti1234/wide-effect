@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/effect" },
+    { "path": "./packages/foldkit" },
+    { "path": "./packages/testing" },
+    { "path": "./packages/lint" }
+  ]
+}

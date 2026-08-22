@@ -12,4 +12,5 @@ server, and worker flows with W3C trace context, and provide bounded redacted di
 human debugging and AI-assisted incident analysis.
 
 - [Executable implementation plan](docs/implementation-plan.md)
+- [Compatibility policy](docs/compatibility.md)
 - [Repository agent instructions](AGENTS.md)

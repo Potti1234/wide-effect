@@ -1,0 +1,21 @@
+{
+  "name": "@wide-effect/foldkit",
+  "version": "0.0.0",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-rc.108",
+    "foldkit": "0.144.0"
+  }
+}

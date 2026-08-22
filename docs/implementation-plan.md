@@ -28,8 +28,9 @@ than patched only in the application.
 5. Buffers are bounded. Overflow policy, retries, exporter isolation, flush, and shutdown are explicit
    configuration with observable counters.
 6. Foldkit integration uses supported public application, `Command.mapEffect`, and DevTools
-   overlay/store seams. It annotates Foldkit's existing Command spans rather than creating competing
-   spans, and does not mutate user `update`, `view`, or private runtime internals.
+   host/store seams. Foldkit 0.144 registers overlays through `foldkit/devtools-host`, not application
+   config. wide-effect annotates existing Command spans rather than creating competing spans and does
+   not mutate user `update`, `view`, or private runtime internals.
 7. Browser header injection requires an explicit allowed-origin policy. No blanket fetch patching.
 8. Diagnostics use allowlisted summaries. A full Foldkit Model is never captured or exported.
 9. Effect `4.0.0-rc.108` is the initial consumer compatibility target. Reference source at beta.100
@@ -256,8 +257,10 @@ entry points must be statically separated.
 - Wrap application `init`/`update` at the configuration boundary and transform returned Commands with
   public `Command.mapEffect`, annotating the runtime's existing Command span with interaction/message
   correlation. User `update` and `view` remain pure.
-- Provide a composite overlay and require production capture to use `show: "Always"` with Inspect mode;
-  the visual overlay remains optional and development time travel remains delegated to Foldkit.
+- Register a composite observer through the public `foldkit/devtools-host` host seam after any Vite
+  visual-overlay registration, and require production capture to use `show: "Always"` with Inspect
+  mode. The visual overlay remains optional and development time travel remains delegated to
+  `@foldkit/devtools/vite`; test the global last-registration-wins ordering explicitly.
 - Maintain a redacted bounded browser ring buffer with count, byte, and age limits.
 - Provide opt-in sanitized diagnostic upload/export and explicit per-Message/per-field summarizers.
 - Preserve development time travel and MCP DevTools behavior.
@@ -265,7 +268,8 @@ entry points must be statically separated.
 ### Acceptance criteria
 
 - User `update` and `view` remain pure and application Model/Message schemas remain unchanged.
-- DevTools and time travel still work with instrumentation enabled.
+- DevTools and time travel still work with instrumentation enabled. MCP compatibility is verified in
+  Vite development/HMR, because the MCP bridge is not active in a production `show: "Always"` build.
 - Command spans retain Foldkit names and correlate with the initiating interaction.
 - Applications configure high-frequency `excludeFromHistory` tags before recording; sensitive payload
   fields do not enter the wide-effect buffer.

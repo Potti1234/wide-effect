@@ -25,7 +25,7 @@ export function decideSampling(config: SamplingConfig, input: SamplingInput): Sa
   if (input.durationMs >= config.slowThresholdMs) return { keep: true, reason: "slow" };
   if (config.importantOperations.includes(input.operation))
     return { keep: true, reason: "important" };
-  return input.deterministicValue < config.successRatio
+  return config.successRatio === 1 || input.deterministicValue < config.successRatio
     ? { keep: true, reason: "sampled" }
     : { keep: false, reason: "dropped" };
 }

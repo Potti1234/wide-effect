@@ -59,10 +59,17 @@ try {
 
   const source = packageDirectories
     .map((name) => `await import("@wide-effect/${name}");`)
-    .concat('await import("effect");', 'await import("foldkit");')
+    .concat(
+      'await import("@wide-effect/effect/server");',
+      'await import("effect");',
+      'await import("foldkit");',
+    )
     .join("\n");
   await writeFile(join(consumerDirectory, "smoke.mjs"), source);
   await Bun.$`bun smoke.mjs`.cwd(consumerDirectory);
+  await assertBrowserSafeEffectGraph(
+    join(consumerDirectory, "node_modules", "@wide-effect", "effect", "dist", "index.js"),
+  );
 
   const effectInstallations = await findPackageInstallations(
     join(consumerDirectory, "node_modules"),
@@ -73,6 +80,24 @@ try {
   }
 } finally {
   await rm(temporaryRoot, { force: true, recursive: true });
+}
+
+async function assertBrowserSafeEffectGraph(entry: string): Promise<void> {
+  const pending = [entry];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const path = pending.pop();
+    if (!path || visited.has(path)) continue;
+    visited.add(path);
+    const source = await readFile(path, "utf8");
+    if (/from\s+["'](?:node:|bun:)/.test(source) || source.includes("FileSystem")) {
+      throw new Error(`Browser entry reaches a server-only dependency: ${path}`);
+    }
+    for (const match of source.matchAll(/from\s+["'](\.\/.+?\.js)["']/g)) {
+      const relative = match[1];
+      if (relative) pending.push(resolve(path, "..", relative));
+    }
+  }
 }
 
 async function findPackageInstallations(directory: string, packageName: string): Promise<string[]> {

@@ -14,6 +14,9 @@
       "import": "./dist/index.js"
     }
   },
+  "dependencies": {
+    "@wide-effect/core": "workspace:*"
+  },
   "peerDependencies": {
     "effect": "4.0.0-rc.108"
   }

@@ -1,9 +1,15 @@
-import { parseSpanId, parseTraceId, type FlowSpan } from "@wide-effect/core";
+import {
+  FlowSpan,
+  parseSpanId,
+  parseTraceId,
+  type FlowSpan as FlowSpanType,
+} from "@wide-effect/core";
 import { expect } from "@effect/vitest";
-import { Effect, Fiber, Layer, Logger, Tracer } from "effect";
+import { Context, Effect, Exit, Fiber, Layer, Logger, Option, Schema, Tracer } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, it } from "@effect/vitest";
 import {
+  CompletedSpanSink,
   InMemoryCompletedSpans,
   annotate,
   configLayer,
@@ -11,6 +17,7 @@ import {
   idGeneratorLayer,
   inMemoryCompletedSpanSinkLayer,
   loggerLayer,
+  noopCompletedSpanSinkLayer,
   tracerLayer,
 } from "../src/index.js";
 
@@ -24,7 +31,7 @@ const makeTestLayer = (humanLogger?: Logger.Logger<unknown, void>) => {
       nextTraceId: () => parseTraceId((next++).toString(16).padStart(32, "0")),
       nextSpanId: () => parseSpanId((next++).toString(16).padStart(16, "0")),
     }),
-    inMemoryCompletedSpanSinkLayer,
+    inMemoryCompletedSpanSinkLayer(),
   );
   return Layer.merge(tracerLayer, loggerLayer({ humanLogger })).pipe(
     Layer.provideMerge(dependencies),
@@ -169,12 +176,99 @@ describe("wide Effect tracer", () => {
     );
     return Effect.void.pipe(
       Effect.withSpan("discarded"),
-      Effect.provide(Layer.merge(tracerLayer, loggerLayer()).pipe(Layer.provide(dependencies))),
+      Effect.provide(
+        Layer.merge(tracerLayer, loggerLayer()).pipe(
+          Layer.provide(Layer.merge(dependencies, noopCompletedSpanSinkLayer)),
+        ),
+      ),
     );
+  });
+
+  it.effect("sanitizes names and emits schema-valid spans", () =>
+    Effect.gen(function* () {
+      yield* Effect.void.pipe(Effect.withSpan(`  ${"x".repeat(300)}\n`));
+      const spans = yield* InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
+      expect(spans).toHaveLength(1);
+      expect(spans[0]?.operation).toHaveLength(256);
+      expect(() => Schema.decodeUnknownSync(FlowSpan)(spans[0])).not.toThrow();
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("cannot throw from completion with a throwing sink or extreme clock values", () => {
+    let next = 900;
+    const dependencies = Layer.mergeAll(
+      configLayer({ service }),
+      idGeneratorLayer({
+        nextTraceId: () => parseTraceId((next++).toString(16).padStart(32, "0")),
+        nextSpanId: () => parseSpanId((next++).toString(16).padStart(16, "0")),
+      }),
+      Layer.succeed(CompletedSpanSink, {
+        unsafeOffer: () => {
+          throw new Error("sink unavailable");
+        },
+      }),
+    );
+    const live = Layer.merge(tracerLayer.pipe(Layer.provide(dependencies)), dependencies);
+    return Effect.gen(function* () {
+      const tracer = yield* Effect.tracer;
+      const span = tracer.span({
+        name: "extreme",
+        parent: Option.none(),
+        annotations: Context.empty(),
+        links: [],
+        startTime: 10n ** 40n,
+        kind: "internal",
+        root: true,
+        sampled: true,
+      });
+      expect(() => span.end(-(10n ** 40n), Exit.succeed(undefined))).not.toThrow();
+    }).pipe(Effect.provide(live));
+  });
+
+  it.effect("discards hostile parents without evaluating them twice", () =>
+    Effect.gen(function* () {
+      const parent = Tracer.externalSpan({
+        traceId: parseTraceId("a".repeat(32)),
+        spanId: parseSpanId("b".repeat(16)),
+      });
+      let reads = 0;
+      Object.defineProperty(parent, "traceId", {
+        get: () => {
+          reads++;
+          throw new Error("hostile");
+        },
+      });
+      yield* Effect.void.pipe(Effect.withSpan("safe-root", { parent }));
+      const spans = yield* InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
+      expect(operation(spans, "safe-root").parentSpanId).toBeUndefined();
+      expect(reads).toBe(1);
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("bounds the in-memory sink with explicit drop-oldest behavior", () => {
+    let next = 1_000;
+    const dependencies = Layer.mergeAll(
+      configLayer({ service }),
+      idGeneratorLayer({
+        nextTraceId: () => parseTraceId((next++).toString(16).padStart(32, "0")),
+        nextSpanId: () => parseSpanId((next++).toString(16).padStart(16, "0")),
+      }),
+      inMemoryCompletedSpanSinkLayer({ capacity: 2, overflow: "drop-oldest" }),
+    );
+    const live = Layer.merge(tracerLayer.pipe(Layer.provide(dependencies)), dependencies);
+    return Effect.gen(function* () {
+      yield* Effect.void.pipe(Effect.withSpan("one"));
+      yield* Effect.void.pipe(Effect.withSpan("two"));
+      yield* Effect.void.pipe(Effect.withSpan("three"));
+      const store = yield* InMemoryCompletedSpans;
+      expect((yield* store.spans).map((span) => span.operation)).toEqual(["two", "three"]);
+      expect(yield* store.dropped).toBe(1);
+    }).pipe(Effect.provide(live));
   });
 });
 
-function operation(spans: ReadonlyArray<FlowSpan>, name: string): FlowSpan {
+function operation(spans: ReadonlyArray<FlowSpanType>, name: string): FlowSpanType {
+  for (const span of spans) Schema.decodeUnknownSync(FlowSpan)(span);
   const found = spans.find((span) => span.operation === name);
   if (!found) throw new Error(`Missing span ${name}`);
   return found;

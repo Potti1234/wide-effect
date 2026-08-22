@@ -50,11 +50,11 @@ class WideSpan implements Tracer.Span {
     private readonly sink: CompletedSpanSinkService,
   ) {
     this.name = options.name;
-    this.parent = options.root ? Option.none() : validParent(options.parent);
+    this.parent = options.root ? Option.none() : snapshotParent(options.parent);
     this.annotations = options.annotations;
     this.sampled = options.sampled;
     this.kind = options.kind;
-    this.links = [...options.links];
+    this.links = safeLinks(options.links);
     this.spanId = ids.nextSpanId();
     this.traceId = Option.match(this.parent, {
       onNone: ids.nextTraceId,
@@ -81,8 +81,8 @@ class WideSpan implements Tracer.Span {
     this.ended = true;
     const startTime = this.status.startTime;
     this.status = { _tag: "Ended", startTime, endTime, exit };
-    const completed = this.complete(startTime, endTime, exit);
     try {
+      const completed = this.complete(startTime, endTime, exit);
       this.sink.unsafeOffer(completed);
     } catch {
       // A telemetry sink is never allowed to alter the business Exit.
@@ -112,12 +112,12 @@ class WideSpan implements Tracer.Span {
         ? {}
         : { parentSpanId: Schema.decodeUnknownSync(SpanId)(parent.spanId) }),
       service: this.config.service,
-      operation: this.name,
+      operation: safeName(this.name, "unnamed-span"),
       kind: this.kind,
       outcome: classifyOutcome(exit),
       startTime: timestamp(startTimeNanos),
       endTime: timestamp(endTimeNanos),
-      durationMs: Number(endTimeNanos - startTimeNanos) / 1_000_000,
+      durationMs: durationMillis(startTimeNanos, endTimeNanos),
       attributes: normalizeAttributes(rawAttributes, this.config.attributePolicy),
       events: this.events
         .toSorted((left, right) =>
@@ -136,13 +136,35 @@ class WideSpan implements Tracer.Span {
 const decodeTraceId = Schema.decodeUnknownOption(TraceId);
 const decodeSpanId = Schema.decodeUnknownOption(SpanId);
 
-function validParent(parent: Option.Option<Tracer.AnySpan>): Option.Option<Tracer.AnySpan> {
-  return Option.filter(
-    parent,
-    (candidate) =>
-      Option.isSome(decodeTraceId(candidate.traceId)) &&
-      Option.isSome(decodeSpanId(candidate.spanId)),
-  );
+function snapshotParent(parent: Option.Option<Tracer.AnySpan>): Option.Option<Tracer.AnySpan> {
+  if (Option.isNone(parent)) return Option.none();
+  try {
+    const traceId = decodeTraceId(parent.value.traceId);
+    const spanId = decodeSpanId(parent.value.spanId);
+    if (Option.isNone(traceId) || Option.isNone(spanId)) return Option.none();
+    return Option.some(
+      Tracer.externalSpan({
+        traceId: traceId.value,
+        spanId: spanId.value,
+        sampled: parent.value.sampled,
+      }),
+    );
+  } catch {
+    return Option.none();
+  }
+}
+
+function safeLinks(links: ReadonlyArray<Tracer.SpanLink>): Array<Tracer.SpanLink> {
+  const output: Array<Tracer.SpanLink> = [];
+  try {
+    for (const link of links.slice(0, 128)) {
+      const parent = snapshotParent(Option.some(link.span));
+      if (Option.isSome(parent)) output.push({ span: parent.value, attributes: link.attributes });
+    }
+  } catch {
+    return output;
+  }
+  return output;
 }
 
 interface RawEvent {
@@ -158,7 +180,7 @@ function normalizeEvent(
 ): SpanEvent {
   const level = readLogLevel(event.attributes["effect.logLevel"]);
   return {
-    name: String(normalizeValue(event.name)).slice(0, 256) || "event",
+    name: safeName(event.name, "event"),
     timestamp: timestamp(event.startTime),
     ...(level === undefined ? {} : { level }),
     attributes: normalizeAttributes(event.attributes, policy),
@@ -186,7 +208,28 @@ function classifyOutcome(exit: Exit.Exit<unknown, unknown>): SpanOutcome {
 }
 
 function timestamp(nanos: bigint): string {
-  return new Date(Number(nanos / 1_000_000n)).toISOString();
+  const milliseconds = nanos / 1_000_000n;
+  const minimum = -8_640_000_000_000_000n;
+  const maximum = 8_640_000_000_000_000n;
+  const bounded =
+    milliseconds < minimum ? minimum : milliseconds > maximum ? maximum : milliseconds;
+  return new Date(Number(bounded)).toISOString();
+}
+
+function durationMillis(start: bigint, end: bigint): number {
+  const nanos = end > start ? end - start : 0n;
+  const whole = nanos / 1_000_000n;
+  const fraction = nanos % 1_000_000n;
+  const value = Number(whole) + Number(fraction) / 1_000_000;
+  return Number.isFinite(value) ? value : Number.MAX_VALUE;
+}
+
+function safeName(value: string, fallback: string): string {
+  const normalized = String(normalizeValue(value))
+    .replace(/[^\x20-\x7e]/g, "?")
+    .trim()
+    .slice(0, 256);
+  return normalized || fallback;
 }
 
 export type { SafeAttributes };

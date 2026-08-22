@@ -1,5 +1,5 @@
-import type { AttributePolicy, ServiceMetadata } from "@wide-effect/core";
-import { Context, Layer } from "effect";
+import { ServiceMetadata, type AttributePolicy } from "@wide-effect/core";
+import { Context, Effect, Layer, Schema } from "effect";
 
 export interface ObservabilityConfigService {
   readonly service: ServiceMetadata;
@@ -17,12 +17,16 @@ export interface ObservabilityOptions {
 }
 
 export const configLayer = (options: ObservabilityOptions) =>
-  Layer.succeed(
+  Layer.effect(
     ObservabilityConfig,
-    ObservabilityConfig.of({
-      service: options.service,
-      attributePolicy: options.attributePolicy ?? defaultAttributePolicy,
-    }),
+    Schema.decodeUnknownEffect(ServiceMetadata)(options.service).pipe(
+      Effect.map((service) =>
+        ObservabilityConfig.of({
+          service,
+          attributePolicy: options.attributePolicy ?? defaultAttributePolicy,
+        }),
+      ),
+    ),
   );
 
 const defaultAttributePolicy: AttributePolicy = {

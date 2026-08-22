@@ -29,9 +29,33 @@ try {
 
   await writeFile(
     join(consumerDirectory, "package.json"),
-    JSON.stringify({ name: "wide-effect-package-smoke", private: true, type: "module" }, null, 2),
+    JSON.stringify(
+      {
+        name: "wide-effect-package-smoke",
+        private: true,
+        type: "module",
+        overrides: Object.fromEntries(
+          packageDirectories.map((name, index) => [
+            `@wide-effect/${name}`,
+            `file:${tarballs[index]?.replaceAll("\\", "/")}`,
+          ]),
+        ),
+        dependencies: {
+          ...Object.fromEntries(
+            packageDirectories.map((name, index) => [
+              `@wide-effect/${name}`,
+              `file:${tarballs[index]?.replaceAll("\\", "/")}`,
+            ]),
+          ),
+          effect: "4.0.0-rc.108",
+          foldkit: "0.144.0",
+        },
+      },
+      null,
+      2,
+    ),
   );
-  await Bun.$`bun add ${tarballs} effect@4.0.0-rc.108 foldkit@0.144.0`.cwd(consumerDirectory);
+  await Bun.$`bun install`.cwd(consumerDirectory);
 
   const source = packageDirectories
     .map((name) => `await import("@wide-effect/${name}");`)

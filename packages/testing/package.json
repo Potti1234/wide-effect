@@ -12,9 +12,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./vitest": {
+      "types": "./dist/vitest.d.ts",
+      "import": "./dist/vitest.js"
     }
   },
   "peerDependencies": {
+    "@wide-effect/core": "0.0.0",
     "effect": "4.0.0-rc.108"
   }
 }

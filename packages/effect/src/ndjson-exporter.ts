@@ -14,7 +14,7 @@ export interface NdjsonSpanExporterOptions {
   readonly mode?: number;
 }
 
-/** Server-only append exporter. Each successful export is durable at the FileSystem boundary. */
+/** Server-only serialized append exporter. Completion does not imply an fsync durability guarantee. */
 export const makeNdjsonSpanExporter = (
   options: NdjsonSpanExporterOptions,
 ): Effect.Effect<SpanExporter, never, FileSystem.FileSystem> =>
@@ -25,22 +25,28 @@ export const makeNdjsonSpanExporter = (
     return {
       name,
       export: (batch) =>
-        lifecycle.ensureOpen("export").pipe(
-          Effect.andThen(Effect.forEach(batch, serializeSpan)),
-          Effect.map((lines) => `${lines.join("\n")}\n`),
-          Effect.flatMap((data) =>
-            fileSystem.writeFileString(options.path, data, {
-              flag: "a",
-              ...(options.mode === undefined ? {} : { mode: options.mode }),
-            }),
-          ),
-          Effect.mapError((cause) =>
-            cause instanceof SpanExporterError
-              ? cause
-              : exporterError(name, "export", safeErrorMessage(cause, "filesystem append failed")),
+        lifecycle.run(
+          "export",
+          Effect.forEach(batch, serializeSpan).pipe(
+            Effect.map((lines) => `${lines.join("\n")}\n`),
+            Effect.flatMap((data) =>
+              fileSystem.writeFileString(options.path, data, {
+                flag: "a",
+                mode: options.mode ?? 0o600,
+              }),
+            ),
+            Effect.mapError((cause) =>
+              cause instanceof SpanExporterError
+                ? cause
+                : exporterError(
+                    name,
+                    "export",
+                    safeErrorMessage(cause, "filesystem append failed"),
+                  ),
+            ),
           ),
         ),
-      flush: lifecycle.ensureOpen("flush"),
+      flush: lifecycle.run("flush", Effect.void),
       shutdown: lifecycle.shutdown,
     };
   });

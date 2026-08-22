@@ -3,3 +3,4 @@ export * from "./identifiers.js";
 export * from "./safe-value.js";
 export * from "./sampling.js";
 export * from "./telemetry.js";
+export * from "./w3c.js";

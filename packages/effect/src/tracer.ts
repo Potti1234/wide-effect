@@ -64,16 +64,23 @@ class WideSpan implements Tracer.Span {
   }
 
   attribute(key: string, value: unknown): void {
-    if (!this.ended) this.attributes.set(key, value);
+    if (this.ended) return;
+    const sanitized = normalizeAttributes({ [key]: value }, this.config.attributePolicy);
+    if (Object.hasOwn(sanitized, key)) this.attributes.set(key, sanitized[key]);
   }
 
   event(name: string, startTime: bigint, attributes: Record<string, unknown> = {}): void {
     if (!this.ended)
-      this.events.push({ name, startTime, attributes, sequence: this.events.length });
+      this.events.push({
+        name,
+        startTime,
+        attributes: normalizeAttributes(attributes, this.config.attributePolicy),
+        sequence: this.events.length,
+      });
   }
 
   addLinks(links: ReadonlyArray<Tracer.SpanLink>): void {
-    if (!this.ended) this.links.push(...links);
+    if (!this.ended) this.links.push(...safeLinks(links));
   }
 
   end(endTime: bigint, exit: Exit.Exit<unknown, unknown>): void {
@@ -159,7 +166,13 @@ function safeLinks(links: ReadonlyArray<Tracer.SpanLink>): Array<Tracer.SpanLink
   try {
     for (const link of links.slice(0, 128)) {
       const parent = snapshotParent(Option.some(link.span));
-      if (Option.isSome(parent)) output.push({ span: parent.value, attributes: link.attributes });
+      if (Option.isSome(parent))
+        output.push({
+          span: parent.value,
+          // Link attributes are nested under the policy-approved `effect.links`
+          // container, so retain every safe key while still dropping secrets.
+          attributes: normalizeAttributes(link.attributes, { allowedPrefixes: [""] }),
+        });
     }
   } catch {
     return output;
@@ -170,7 +183,7 @@ function safeLinks(links: ReadonlyArray<Tracer.SpanLink>): Array<Tracer.SpanLink
 interface RawEvent {
   readonly name: string;
   readonly startTime: bigint;
-  readonly attributes: Record<string, unknown>;
+  readonly attributes: SafeAttributes;
   readonly sequence: number;
 }
 

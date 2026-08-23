@@ -23,10 +23,13 @@ import {
 
 const service = { name: "test-service", version: "1", environment: "test" } as const;
 
-const makeTestLayer = (humanLogger?: Logger.Logger<unknown, void>) => {
+const makeTestLayer = (
+  humanLogger?: Logger.Logger<unknown, void>,
+  allowedPrefixes: ReadonlyArray<string> = ["test.", "effect."],
+) => {
   let next = 1;
   const dependencies = Layer.mergeAll(
-    configLayer({ service, attributePolicy: { allowedPrefixes: ["test.", "effect."] } }),
+    configLayer({ service, attributePolicy: { allowedPrefixes } }),
     idGeneratorLayer({
       nextTraceId: () => parseTraceId((next++).toString(16).padStart(32, "0")),
       nextSpanId: () => parseSpanId((next++).toString(16).padStart(16, "0")),
@@ -136,6 +139,44 @@ describe("wide Effect tracer", () => {
       expect(operation(spans, "annotated").attributes).toMatchObject({ "test.visible": "yes" });
       expect(JSON.stringify(spans)).not.toContain("secret");
     }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect(
+    "drops sensitive server attributes without dropping the span or changing its exit",
+    () =>
+      Effect.gen(function* () {
+        const secret = "Bearer production-secret-never-store";
+        let secretReads = 0;
+        const headers = { "x-request-id": "request-123" };
+        Object.defineProperty(headers, "authorization", {
+          enumerable: true,
+          get: () => {
+            secretReads++;
+            return secret;
+          },
+        });
+        const exit = yield* Effect.exit(
+          Effect.gen(function* () {
+            yield* Effect.annotateCurrentSpan("http.request.method", "GET");
+            yield* Effect.annotateCurrentSpan("http.request.header.authorization", secret);
+            yield* Effect.annotateCurrentSpan("http.request.header.cookie", `session=${secret}`);
+            yield* Effect.annotateCurrentSpan("http.request.headers", headers);
+            return 42;
+          }).pipe(Effect.withSpan("http.server.request", { kind: "server" })),
+        );
+        const spans = yield* InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
+
+        expect(Exit.isSuccess(exit)).toBe(true);
+        if (Exit.isSuccess(exit)) expect(exit.value).toBe(42);
+        expect(spans).toHaveLength(1);
+        const span = operation(spans, "http.server.request");
+        expect(span.attributes["http.request.method"]).toBe("GET");
+        expect(span.attributes["http.request.header.authorization"]).toBeUndefined();
+        expect(span.attributes["http.request.header.cookie"]).toBeUndefined();
+        expect(span.attributes["http.request.headers"]).toEqual({ "x-request-id": "request-123" });
+        expect(secretReads).toBe(0);
+        expect(JSON.stringify(span)).not.toContain(secret);
+      }).pipe(Effect.provide(makeTestLayer(undefined, ["http.", "effect."]))),
   );
 
   it.effect("records each Effect log as exactly one span event with custom human logging", () =>

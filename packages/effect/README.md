@@ -3,8 +3,9 @@
 Effect-native tracing and export primitives for wide-effect.
 
 The main entry point is browser-safe and exports the exporter contract, fan-out composition,
-in-memory exporter, and direct JSON console exporter. Import the append-only NDJSON adapter from
-`@wide-effect/effect/server`; it requires Effect's `FileSystem` service.
+in-memory exporter, and direct JSON console exporter. Import the append-only NDJSON and OTLP/HTTP JSON
+adapters from `@wide-effect/effect/server`. NDJSON requires Effect's `FileSystem` service; OTLP
+requires an Effect `HttpClient` and maps canonical completed spans without installing another tracer.
 
 Exporter calls accept non-empty completed-span batches. Direct exporter calls and fan-out attempts are
 bounded, `export` and `flush` fail after shutdown, and shutdown waits for admitted work up to its
@@ -14,3 +15,7 @@ NDJSON appends are serialized and new files request owner-only mode (`0600`) on 
 POSIX modes. Windows access is governed by the file's ACL. Completion means the Effect `FileSystem`
 append returned successfully; it is not an `fsync` durability guarantee. Buffering, retries, and tail
 sampling belong to the delivery layer.
+
+The OTLP adapter accepts an HTTP(S) `/v1/traces` endpoint, optional static headers, request timeout,
+and instrumentation scope metadata. Its errors are typed and sanitized: collector response bodies,
+header values, endpoint credentials, and transport causes are never copied into exporter failures.

@@ -4,6 +4,8 @@ import { Effect, Fiber, Layer, Option } from "effect";
 import {
   HttpClient,
   HttpClientResponse,
+  HttpRouter,
+  HttpServer,
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http";
@@ -23,6 +25,61 @@ import {
 const upstream = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
 
 describe("Effect HTTP propagation", () => {
+  it("preserves web-handler adapter metadata while normalizing W3C headers", async () => {
+    const Routes = HttpRouter.add(
+      "GET",
+      "/items",
+      Effect.gen(function* () {
+        const span = yield* Effect.currentSpan;
+        const state = yield* CurrentTraceState;
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        return HttpServerResponse.jsonUnsafe({
+          headers: request.headers,
+          parentSpanId: Option.map(span.parent, (parent) => parent.spanId).pipe(
+            Option.getOrUndefined,
+          ),
+          traceId: span.traceId,
+          tracestate: Option.getOrUndefined(state),
+        });
+      }),
+    ).pipe(Layer.provide(HttpServer.layerServices));
+    const { dispose, handler } = HttpRouter.toWebHandler(Routes, {
+      disableLogger: true,
+      middleware: w3cServerTracer,
+    });
+
+    try {
+      const continued = await handler(
+        new Request("https://api.example.test/items", {
+          headers: { traceparent: upstream, tracestate: "vendor=state" },
+        }),
+      );
+      expect(continued.status).toBe(200);
+      await expect(continued.json()).resolves.toEqual({
+        headers: { traceparent: upstream, tracestate: "vendor=state" },
+        parentSpanId: "bbbbbbbbbbbbbbbb",
+        traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        tracestate: "vendor=state",
+      });
+
+      const fresh = await handler(
+        new Request("https://api.example.test/items", {
+          headers: {
+            traceparent: `${upstream},${upstream}`,
+            tracestate: "vendor=a,vendor=b",
+            b3: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-1",
+          },
+        }),
+      );
+      expect(fresh.status).toBe(200);
+      const body: unknown = await fresh.json();
+      expect(body).toMatchObject({ headers: {} });
+      expect(body).not.toMatchObject({ parentSpanId: "bbbbbbbbbbbbbbbb" });
+    } finally {
+      await dispose();
+    }
+  });
+
   it.effect("delegates one continued server span to HttpMiddleware.tracer", () =>
     Effect.suspend(() => {
       let observedState = "missing";

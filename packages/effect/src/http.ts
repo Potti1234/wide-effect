@@ -49,12 +49,31 @@ export const w3cServerTracer: typeof HttpMiddleware.tracer = HttpMiddleware.make
         traceState = Option.some(carrier.value.tracestate);
       }
     }
+    const normalizedRequest = preserveAdapterMetadata(request, request.modify({ headers }));
     return HttpMiddleware.tracer(app).pipe(
-      Effect.provideService(HttpServerRequest.HttpServerRequest, request.modify({ headers })),
+      Effect.provideService(HttpServerRequest.HttpServerRequest, normalizedRequest),
       Effect.provideService(CurrentTraceState, traceState),
     );
   }),
 );
+
+/**
+ * Request adapters may attach transport state as own properties that are not part of the public
+ * HttpServerRequest contract. `modify` intentionally returns a request view, so forward only
+ * properties absent from that public view to keep the adapter responsible for its own metadata.
+ */
+function preserveAdapterMetadata(
+  original: HttpServerRequest.HttpServerRequest,
+  modified: HttpServerRequest.HttpServerRequest,
+): HttpServerRequest.HttpServerRequest {
+  return new Proxy(modified, {
+    get(target, property) {
+      return Reflect.has(target, property)
+        ? Reflect.get(target, property, target)
+        : Reflect.get(original, property, original);
+    },
+  });
+}
 
 /** Adds validated tracestate to Effect's existing client propagation without creating another span. */
 export const withTraceStatePropagation = <E, R>(

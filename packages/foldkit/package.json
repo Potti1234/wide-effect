@@ -1,6 +1,6 @@
 {
   "name": "@wide-effect/foldkit",
-  "version": "0.0.0",
+  "version": "0.0.1-alpha.0",
   "description": "Foldkit interaction correlation and sanitized diagnostic timelines",
   "license": "MIT",
   "repository": {

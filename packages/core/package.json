@@ -1,6 +1,6 @@
 {
   "name": "@wide-effect/core",
-  "version": "0.0.0",
+  "version": "0.0.1-alpha.0",
   "description": "Runtime-neutral contracts and safe normalization for wide-effect telemetry",
   "license": "MIT",
   "repository": {

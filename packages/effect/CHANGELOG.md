@@ -1,5 +1,11 @@
 # @wide-effect/effect
 
+## 0.0.1-alpha.3
+
+### Patch Changes
+
+- Make release formatting deterministic across operating systems.
+
 ## 0.0.1-alpha.2
 
 ### Patch Changes

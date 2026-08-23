@@ -1,0 +1,57 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run release:verify -- "${GITHUB_REF_NAME}"
+
+      - name: Select npm tag
+        id: npm-tag
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "$version" == *-* ]]; then
+            prerelease="${version#*-}"
+            echo "value=${prerelease%%.*}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish package suite
+        shell: bash
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+        run: |
+          for package in core effect foldkit lint testing; do
+            npm publish \
+              --workspace "packages/$package" \
+              --access public \
+              --tag "${{ steps.npm-tag.outputs.value }}"
+          done

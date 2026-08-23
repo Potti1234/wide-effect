@@ -1,6 +1,6 @@
 {
   "name": "@wide-effect/testing",
-  "version": "0.0.1-alpha.0",
+  "version": "0.0.1-alpha.2",
   "description": "Deterministic collectors and trace assertions for wide-effect tests",
   "license": "MIT",
   "repository": {
@@ -31,7 +31,7 @@
     "provenance": true
   },
   "peerDependencies": {
-    "@wide-effect/core": "0.0.1-alpha.0",
+    "@wide-effect/core": "0.0.1-alpha.2",
     "effect": "4.0.0-rc.108"
   }
 }

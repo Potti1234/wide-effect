@@ -3,7 +3,15 @@
   "access": "public",
   "baseBranch": "main",
   "commit": false,
-  "fixed": [],
+  "fixed": [
+    [
+      "@wide-effect/core",
+      "@wide-effect/effect",
+      "@wide-effect/foldkit",
+      "@wide-effect/lint",
+      "@wide-effect/testing"
+    ]
+  ],
   "ignore": [],
   "linked": [],
   "privatePackages": {

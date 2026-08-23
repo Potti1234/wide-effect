@@ -1,5 +1,11 @@
 # @wide-effect/testing
 
+## 0.0.1-alpha.2
+
+### Patch Changes
+
+- Synchronize the package suite for tag-driven releases.
+
 ## 0.0.1-alpha.0
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@wide-effect/foldkit",
-  "version": "0.0.1-alpha.1",
+  "version": "0.0.1-alpha.2",
   "description": "Foldkit interaction correlation and sanitized diagnostic timelines",
   "license": "MIT",
   "repository": {
@@ -27,8 +27,8 @@
     "provenance": true
   },
   "dependencies": {
-    "@wide-effect/core": "0.0.1-alpha.0",
-    "@wide-effect/effect": "0.0.1-alpha.1"
+    "@wide-effect/core": "0.0.1-alpha.2",
+    "@wide-effect/effect": "0.0.1-alpha.2"
   },
   "peerDependencies": {
     "effect": "4.0.0-rc.108",

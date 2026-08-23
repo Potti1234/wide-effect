@@ -1,6 +1,6 @@
 {
   "name": "@wide-effect/lint",
-  "version": "0.0.1-alpha.0",
+  "version": "0.0.1-alpha.2",
   "description": "Reusable ast-grep rules for observability invariants",
   "license": "MIT",
   "repository": {

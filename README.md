@@ -28,4 +28,5 @@ browser-safe. Applications own authentication, persistence, retention, and domai
 - [Sampling and delivery](docs/sampling-and-delivery.md)
 - [Operations](docs/operations.md)
 - [Migration guide](docs/migration.md)
+- [Release process](docs/releasing.md)
 - [Repository agent instructions](AGENTS.md)

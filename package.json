@@ -2,11 +2,14 @@
   "name": "wide-effect-workspace",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "examples/*"
   ],
   "type": "module",
   "scripts": {
     "build": "tsc -b",
+    "example:check": "bun run --cwd examples/correlated-fullstack typecheck && bun run example:fullstack",
+    "example:fullstack": "bun run --cwd examples/correlated-fullstack start",
     "clean": "tsc -b --clean",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
@@ -14,7 +17,10 @@
     "package:check": "bun run build && bun scripts/package-smoke.ts",
     "test": "bun run build && vitest run",
     "typecheck": "tsc -b --pretty false",
-    "check": "bun run format:check && bun run lint && bun run test && bun run package:check"
+    "check": "bun run format:check && bun run lint && bun run test && bun run package:check && bun run example:check",
+    "changeset": "changeset",
+    "release:version": "changeset version",
+    "release:publish": "bun run check && changeset publish"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.7",

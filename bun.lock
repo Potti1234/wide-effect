@@ -21,6 +21,20 @@
         "vitest": "^4.1.7",
       },
     },
+    "examples/correlated-fullstack": {
+      "name": "@wide-effect/example-correlated-fullstack",
+      "dependencies": {
+        "@wide-effect/core": "workspace:*",
+        "@wide-effect/effect": "workspace:*",
+        "@wide-effect/foldkit": "workspace:*",
+        "@wide-effect/testing": "workspace:*",
+        "effect": "4.0.0-rc.108",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.3.0",
+        "typescript": "^5.9.3",
+      },
+    },
     "packages/core": {
       "name": "@wide-effect/core",
       "version": "0.0.0",
@@ -288,6 +302,8 @@
     "@wide-effect/core": ["@wide-effect/core@workspace:packages/core"],
 
     "@wide-effect/effect": ["@wide-effect/effect@workspace:packages/effect"],
+
+    "@wide-effect/example-correlated-fullstack": ["@wide-effect/example-correlated-fullstack@workspace:examples/correlated-fullstack"],
 
     "@wide-effect/foldkit": ["@wide-effect/foldkit@workspace:packages/foldkit"],
 

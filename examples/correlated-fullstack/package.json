@@ -1,0 +1,20 @@
+{
+  "name": "@wide-effect/example-correlated-fullstack",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@wide-effect/core": "workspace:*",
+    "@wide-effect/effect": "workspace:*",
+    "@wide-effect/foldkit": "workspace:*",
+    "@wide-effect/testing": "workspace:*",
+    "effect": "4.0.0-rc.108"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "typescript": "^5.9.3"
+  }
+}

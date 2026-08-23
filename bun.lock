@@ -44,7 +44,7 @@
     },
     "packages/effect": {
       "name": "@wide-effect/effect",
-      "version": "0.0.1-alpha.0",
+      "version": "0.0.1-alpha.1",
       "dependencies": {
         "@wide-effect/core": "0.0.1-alpha.0",
       },
@@ -54,10 +54,10 @@
     },
     "packages/foldkit": {
       "name": "@wide-effect/foldkit",
-      "version": "0.0.1-alpha.0",
+      "version": "0.0.1-alpha.1",
       "dependencies": {
         "@wide-effect/core": "0.0.1-alpha.0",
-        "@wide-effect/effect": "0.0.1-alpha.0",
+        "@wide-effect/effect": "0.0.1-alpha.1",
       },
       "peerDependencies": {
         "effect": "4.0.0-rc.108",

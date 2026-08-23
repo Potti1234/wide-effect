@@ -1,5 +1,12 @@
 # @wide-effect/effect
 
+## 0.0.1-alpha.1
+
+### Patch Changes
+
+- Preserve Effect server-adapter request metadata during W3C normalization and retain spans when
+  framework-provided attributes contain unsafe keys, while excluding those keys and values.
+
 ## 0.0.1-alpha.0
 
 ### Patch Changes

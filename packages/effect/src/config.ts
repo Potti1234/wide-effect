@@ -30,5 +30,5 @@ export const configLayer = (options: ObservabilityOptions) =>
   );
 
 const defaultAttributePolicy: AttributePolicy = {
-  allowedPrefixes: ["effect.", "http.", "url.", "server.", "client.", "user_agent."],
+  allowedPrefixes: ["effect.", "foldkit.", "http.", "url.", "server.", "client.", "user_agent."],
 };

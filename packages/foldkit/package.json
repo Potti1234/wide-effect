@@ -14,6 +14,10 @@
       "import": "./dist/index.js"
     }
   },
+  "dependencies": {
+    "@wide-effect/core": "workspace:*",
+    "@wide-effect/effect": "workspace:*"
+  },
   "peerDependencies": {
     "effect": "4.0.0-rc.108",
     "foldkit": "0.144.0"

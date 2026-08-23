@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "files": [
     "dist",
+    "rules",
+    "rule-tests",
+    "sgconfig.yml",
     "README.md",
     "LICENSE"
   ],
@@ -12,6 +15,17 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./sgconfig.yml": "./sgconfig.yml",
+    "./rules/*": "./rules/*",
+    "./rule-tests/*": "./rule-tests/*"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "ast-grep test --config sgconfig.yml --skip-snapshot-tests",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "devDependencies": {
+    "@ast-grep/cli": "^0.43.0"
   }
 }

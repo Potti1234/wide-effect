@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ast-grep/ast-grep/main/schemas/typescript_rule.json
+
+id: wide-effect-no-sensitive-observability-key
+language: tsx
+severity: error
+message: "Do not collect a sensitive field in observability attributes; record a safe derived fact instead"
+
+rule:
+  all:
+    - any:
+        - all:
+            - kind: pair
+            - has:
+                field: key
+                regex: "(?i)^(authorization|cookie|set-cookie|password|passwd|secret|clientsecret|client_secret|token|accesstoken|access_token|refreshtoken|refresh_token|apikey|api_key|credential|credentials|prompt|tooloutput|tool_output|terminaloutput|terminal_output|sourcecontent|source_content)$"
+        - all:
+            - kind: shorthand_property_identifier
+            - regex: "(?i)^(authorization|cookie|password|passwd|secret|clientsecret|token|accesstoken|refreshtoken|apikey|credential|credentials|prompt|tooloutput|terminaloutput|sourcecontent)$"
+    - inside:
+        any:
+          - pattern: event($$$ARGS)
+          - pattern: annotate($$$ARGS)
+          - pattern: Effect.annotateLogs($$$ARGS)
+          - pattern: Effect.annotateCurrentSpan($$$ARGS)
+          - pattern: Effect.withLogSpan($$$ARGS)
+        stopBy: end
+
+note: |
+  Remove the field or replace it with a bounded fact such as `auth.present`,
+  `prompt.byteLength`, or an allowlisted identifier. Redaction is defense in depth,
+  not permission to collect a known secret.

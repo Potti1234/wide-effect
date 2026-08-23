@@ -1,0 +1,14 @@
+id: wide-effect-no-sensitive-observability-key
+valid:
+  - 'event("auth.checked", { "auth.present": true, userId })'
+  - 'annotate({ "prompt.byteLength": byteLength })'
+  # Edge: domain objects are not observability calls.
+  - "const credentials = { token: accessToken }"
+  # Edge: suffixes are not guessed because that would flag safe names such as tokenCount.
+  - 'event("usage", { tokenCount })'
+invalid:
+  - 'event("auth.failed", { authorization: header })'
+  - "annotate({ api_key: apiKey })"
+  - "Effect.annotateLogs({ cookie })"
+  - "Effect.annotateCurrentSpan({ prompt: rawPrompt })"
+  - 'event("tool.finished", { tool_output: output })'

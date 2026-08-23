@@ -1,0 +1,16 @@
+id: wide-effect-no-dynamic-observability-name
+valid:
+  - 'event("worker.claimed", { runId })'
+  - 'Effect.logInfo("Worker claimed run", { runId })'
+  - 'logger.info("Worker claimed run", { runId })'
+  # Edge: a template without substitution is static.
+  - "event(`worker.claimed`, { runId })"
+  # Edge: unrelated functions are deliberately outside this reusable rule.
+  - "render(`Run ${runId}`)"
+invalid:
+  - "event(`worker.${outcome}`, { runId })"
+  - 'event("worker." + outcome, { runId })'
+  - "Effect.logInfo(`Worker claimed ${runId}`)"
+  - 'Effect.logError("Run " + runId + " failed")'
+  - "logger.error(`Run ${runId} failed`, error)"
+  - 'logger.warn("Slow run " + runId)'

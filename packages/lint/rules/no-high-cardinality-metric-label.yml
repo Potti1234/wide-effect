@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ast-grep/ast-grep/main/schemas/typescript_rule.json
+
+id: wide-effect-no-high-cardinality-metric-label
+language: tsx
+severity: error
+message: "Do not use IDs, URLs, paths, or actor data as metric labels; attach them to spans instead"
+
+rule:
+  any:
+    - all:
+        - pattern: Metric.tagged($METRIC, $KEY, $VALUE)
+        - has:
+            field: arguments
+            regex: '(?i)["''](?:trace|span|request|interaction|user|actor|run|task|project|session|tenant|organization|org)[_-]?id["'']|["''](?:url|uri|path|email|ip|hostname)["'']'
+    - all:
+        - kind: string
+        - regex: '(?i)^["''](?:(?:trace|span|request|interaction|user|actor|run|task|project|session|tenant|organization|org)[_-]?id|url|uri|path|email|ip|hostname)["'']$'
+        - inside:
+            pattern: Metric.taggedWithLabels($METRIC, $LABELS)
+            stopBy: end
+
+note: |
+  Use bounded dimensions such as `outcome`, `operation`, or `method`. Put request,
+  actor, resource, URL, and path values on the current span with `annotate`.

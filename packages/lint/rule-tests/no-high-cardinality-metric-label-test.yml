@@ -1,0 +1,14 @@
+id: wide-effect-no-high-cardinality-metric-label
+valid:
+  - 'Metric.tagged(requests, "outcome", outcome)'
+  - 'Metric.tagged(requests, "method", method)'
+  - 'Metric.taggedWithLabels(requests, [["outcome", outcome], ["region", region]])'
+  # Edge: dynamic keys cannot be classified reliably and are left to application policy.
+  - "Metric.tagged(requests, labelName, labelValue)"
+  # Edge: high-cardinality values on spans are correct.
+  - "annotate({ requestId })"
+invalid:
+  - 'Metric.tagged(requests, "requestId", requestId)'
+  - 'Metric.tagged(requests, "user_id", userId)'
+  - 'Metric.tagged(requests, "url", url)'
+  - 'Metric.taggedWithLabels(requests, [["outcome", outcome], ["runId", runId]])'

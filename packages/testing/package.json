@@ -1,10 +1,18 @@
 {
   "name": "@wide-effect/testing",
   "version": "0.0.0",
+  "description": "Deterministic collectors and trace assertions for wide-effect tests",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Potti1234/wide-effect.git",
+    "directory": "packages/testing"
+  },
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "type": "module",
   "sideEffects": false,
@@ -18,8 +26,12 @@
       "import": "./dist/vitest.js"
     }
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "peerDependencies": {
-    "@wide-effect/core": "0.0.0",
+    "@wide-effect/core": "workspace:*",
     "effect": "4.0.0-rc.108"
   }
 }

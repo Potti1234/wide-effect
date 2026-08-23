@@ -1,13 +1,21 @@
 {
   "name": "@wide-effect/lint",
   "version": "0.0.0",
+  "description": "Reusable ast-grep rules for observability invariants",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Potti1234/wide-effect.git",
+    "directory": "packages/lint"
+  },
   "files": [
     "dist",
     "rules",
     "rule-tests",
     "sgconfig.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "type": "module",
   "sideEffects": false,
@@ -19,6 +27,10 @@
     "./sgconfig.yml": "./sgconfig.yml",
     "./rules/*": "./rules/*",
     "./rule-tests/*": "./rule-tests/*"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "build": "tsc -b",

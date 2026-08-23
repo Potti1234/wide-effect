@@ -27,8 +27,8 @@
     "provenance": true
   },
   "dependencies": {
-    "@wide-effect/core": "workspace:*",
-    "@wide-effect/effect": "workspace:*"
+    "@wide-effect/core": "0.0.1-alpha.0",
+    "@wide-effect/effect": "0.0.1-alpha.0"
   },
   "peerDependencies": {
     "effect": "4.0.0-rc.108",

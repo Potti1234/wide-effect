@@ -1,5 +1,15 @@
 # @wide-effect/testing
 
+## 0.0.1-alpha.4
+
+### Patch Changes
+
+- c048f63: Support the Effect and Foldkit versions used by LowKeySec. Foldkit devtools registration is now
+  capability-detected so importing the package remains safe on versions that configure overlays through
+  `devTools.overlay`.
+- Updated dependencies [c048f63]
+  - @wide-effect/core@0.0.1-alpha.4
+
 ## 0.0.1-alpha.3
 
 ### Patch Changes

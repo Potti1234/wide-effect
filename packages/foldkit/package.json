@@ -31,7 +31,7 @@
     "@wide-effect/effect": "0.0.1-alpha.3"
   },
   "peerDependencies": {
-    "effect": "4.0.0-rc.108",
-    "foldkit": "0.144.0"
+    "effect": ">=4.0.0-beta.102 <5.0.0",
+    "foldkit": ">=0.137.0 <1.0.0"
   }
 }

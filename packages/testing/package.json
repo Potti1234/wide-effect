@@ -32,6 +32,6 @@
   },
   "peerDependencies": {
     "@wide-effect/core": "0.0.1-alpha.3",
-    "effect": "4.0.0-rc.108"
+    "effect": ">=4.0.0-beta.102 <5.0.0"
   }
 }

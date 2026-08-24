@@ -40,6 +40,9 @@ Development time travel stays owned by `@foldkit/devtools/vite`. For production 
 Foldkit with `devTools: { show: "Always", mode: "Inspect", excludeFromHistory: [...] }`. The MCP bridge
 is a Vite development feature and is not provided by an `Always` production build.
 
+Foldkit versions without global registration should pass
+`composeDevToolsOverlays(observer, visual)` through `devTools.overlay` instead.
+
 The observer reads only new `entries` from the public store. It never reads `maybeInitModel`,
 `maybeLatestModel`, keyframes, or model lookup methods. Summarizers receive Message or Command
 metadata only; sensitive fields are rejected before buffering. The ring buffer applies count, encoded

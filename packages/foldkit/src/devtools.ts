@@ -1,12 +1,12 @@
 import { isSafeAttributeKey, normalizeAttributes, type SafeAttributes } from "@wide-effect/core";
 import { Effect, Stream, SubscriptionRef } from "effect";
 import {
-  __setDevToolsOverlay,
   latestEntryIndex,
   type CommandRecord,
   type DevToolsOverlay,
   type MountRecord,
 } from "foldkit/devtools-host";
+import * as DevToolsHost from "foldkit/devtools-host";
 import type { TimelineBuffer } from "./timeline.js";
 import type { InteractionRegistry } from "./application.js";
 
@@ -84,7 +84,13 @@ export const registerDevToolsObserver = (
   observer: DevToolsOverlay,
   visual?: DevToolsOverlay,
 ): void => {
-  __setDevToolsOverlay(composeDevToolsOverlays(observer, visual));
+  const register = Reflect.get(DevToolsHost, "__setDevToolsOverlay");
+  if (typeof register !== "function") {
+    throw new Error(
+      "Foldkit does not expose global devtools registration; pass composeDevToolsOverlays(...) through the devTools.overlay configuration instead.",
+    );
+  }
+  register(composeDevToolsOverlays(observer, visual));
 };
 const summarize = (
   value: Readonly<Record<string, unknown>> | undefined,

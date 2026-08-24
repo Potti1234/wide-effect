@@ -11,7 +11,7 @@ const ExporterFailure = Schema.Struct({
 });
 export type ExporterFailure = typeof ExporterFailure.Type;
 
-export class SpanExporterError extends Schema.TaggedError<SpanExporterError>()(
+export class SpanExporterError extends Schema.TaggedClass<SpanExporterError>()(
   "SpanExporterError",
   {
     exporter: Schema.String,

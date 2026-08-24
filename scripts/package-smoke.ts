@@ -6,13 +6,13 @@ const packageDirectories = ["core", "effect", "foldkit", "testing", "lint"] as c
 const workspaceRoot = resolve(import.meta.dir, "..");
 const temporaryRoot = await mkdtemp(join(tmpdir(), "wide-effect-package-smoke-"));
 const tarballDirectory = join(temporaryRoot, "tarballs");
-const consumerDirectory = join(temporaryRoot, "consumer");
+const compatibilityProfiles = [
+  { name: "current", effect: "4.0.0-rc.108", foldkit: "0.144.0" },
+  { name: "lowkeysec", effect: "4.0.0-beta.102", foldkit: "0.137.0" },
+] as const;
 
 try {
-  await Promise.all([
-    mkdir(tarballDirectory, { recursive: true }),
-    mkdir(consumerDirectory, { recursive: true }),
-  ]);
+  await mkdir(tarballDirectory, { recursive: true });
 
   const tarballs: Array<string> = [];
   for (const packageDirectory of packageDirectories) {
@@ -27,56 +27,62 @@ try {
     tarballs.push(join(tarballDirectory, filename));
   }
 
-  await writeFile(
-    join(consumerDirectory, "package.json"),
-    JSON.stringify(
-      {
-        name: "wide-effect-package-smoke",
-        private: true,
-        type: "module",
-        overrides: Object.fromEntries(
-          packageDirectories.map((name, index) => [
-            `@wide-effect/${name}`,
-            `file:${tarballs[index]?.replaceAll("\\", "/")}`,
-          ]),
-        ),
-        dependencies: {
-          ...Object.fromEntries(
+  for (const profile of compatibilityProfiles) {
+    const consumerDirectory = join(temporaryRoot, `consumer-${profile.name}`);
+    await mkdir(consumerDirectory, { recursive: true });
+    await writeFile(
+      join(consumerDirectory, "package.json"),
+      JSON.stringify(
+        {
+          name: `wide-effect-package-smoke-${profile.name}`,
+          private: true,
+          type: "module",
+          overrides: Object.fromEntries(
             packageDirectories.map((name, index) => [
               `@wide-effect/${name}`,
               `file:${tarballs[index]?.replaceAll("\\", "/")}`,
             ]),
           ),
-          effect: "4.0.0-rc.108",
-          foldkit: "0.144.0",
+          dependencies: {
+            ...Object.fromEntries(
+              packageDirectories.map((name, index) => [
+                `@wide-effect/${name}`,
+                `file:${tarballs[index]?.replaceAll("\\", "/")}`,
+              ]),
+            ),
+            effect: profile.effect,
+            foldkit: profile.foldkit,
+          },
         },
-      },
-      null,
-      2,
-    ),
-  );
-  await Bun.$`bun install`.cwd(consumerDirectory);
+        null,
+        2,
+      ),
+    );
+    await Bun.$`bun install`.cwd(consumerDirectory);
 
-  const source = packageDirectories
-    .map((name) => `await import("@wide-effect/${name}");`)
-    .concat(
-      'await import("@wide-effect/effect/server");',
-      'await import("effect");',
-      'await import("foldkit");',
-    )
-    .join("\n");
-  await writeFile(join(consumerDirectory, "smoke.mjs"), source);
-  await Bun.$`bun smoke.mjs`.cwd(consumerDirectory);
-  await assertBrowserSafeEffectGraph(
-    join(consumerDirectory, "node_modules", "@wide-effect", "effect", "dist", "index.js"),
-  );
+    const source = packageDirectories
+      .map((name) => `await import("@wide-effect/${name}");`)
+      .concat(
+        'await import("@wide-effect/effect/server");',
+        'await import("effect");',
+        'await import("foldkit");',
+      )
+      .join("\n");
+    await writeFile(join(consumerDirectory, "smoke.mjs"), source);
+    await Bun.$`bun smoke.mjs`.cwd(consumerDirectory);
+    await assertBrowserSafeEffectGraph(
+      join(consumerDirectory, "node_modules", "@wide-effect", "effect", "dist", "index.js"),
+    );
 
-  const effectInstallations = await findPackageInstallations(
-    join(consumerDirectory, "node_modules"),
-    "effect",
-  );
-  if (effectInstallations.length !== 1) {
-    throw new Error(`Expected one Effect installation, found ${effectInstallations.length}`);
+    const effectInstallations = await findPackageInstallations(
+      join(consumerDirectory, "node_modules"),
+      "effect",
+    );
+    if (effectInstallations.length !== 1) {
+      throw new Error(
+        `Expected one Effect installation for ${profile.name}, found ${effectInstallations.length}`,
+      );
+    }
   }
 } finally {
   await rm(temporaryRoot, { force: true, recursive: true });

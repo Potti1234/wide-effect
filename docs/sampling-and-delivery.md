@@ -25,3 +25,17 @@ Capacity is an operational budget, not a reliability guarantee. Monitor accepted
 exported, retried, dropped, overflowed, and flush-timeout counts. Exporter failure never changes a
 business Effect's result. Shutdown must close the scoped runtime and inspect its explicit flush
 result; do not assume process exit drains telemetry.
+
+Delivery stages normalized spans by local segment and makes one aggregate decision. A retained
+outcome, configured HTTP status, slow span, or important operation retains the ordered segment;
+otherwise one deterministic trace-plus-segment decision applies to every span. Ordering is start
+time, end time, then span ID. Root completion starts a bounded grace period, while missing roots close
+at `maxSegmentAgeMs`.
+
+The decoded `staging` budget includes maximum open segments, spans and bytes per segment, total staged
+bytes, grace/age bounds, overflow policy, and a bounded expiring late-decision cache. Routine overflow
+drops a whole segment. If critical evidence exceeds a per-segment limit, delivery retains the local
+root, configured retained spans, and available ancestors where they fit, and adds
+`wide.segment.dropped_spans` to the root. A late span follows the cached decision: kept segments export
+it once with `wide.segment.late = true`; dropped segments discard it. Shutdown stops admission,
+finalizes every open segment, then flushes exporters within the existing global timeout.

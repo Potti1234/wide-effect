@@ -1,8 +1,9 @@
 import {
   SamplingConfig,
-  decideSampling,
+  SegmentStagingConfig,
   normalizeSamplingConfig,
   type FlowSpan,
+  type SegmentStagingConfig as SegmentStagingConfigType,
 } from "@wide-effect/core";
 import {
   Clock,
@@ -18,6 +19,7 @@ import {
   Schema,
 } from "effect";
 import type { SpanBatch, SpanExporter } from "./exporter.js";
+import { makeSegmentStager, type SegmentStager } from "./segment-staging.js";
 import { CompletedSpanSink } from "./sink.js";
 
 export type OverflowPolicy = "drop-newest" | "drop-oldest";
@@ -40,6 +42,7 @@ export interface DeliveryOptions {
   readonly retry: RetryPolicy;
   readonly sampling: SamplingConfig;
   readonly deterministicValue?: (span: FlowSpan) => number;
+  readonly staging?: SegmentStagingConfigType | undefined;
 }
 
 export interface DeliveryHealthSnapshot {
@@ -55,6 +58,9 @@ export interface DeliveryHealthSnapshot {
   readonly attemptTimeouts: number;
   readonly disabledExporters: number;
   readonly flushTimeouts: number;
+  readonly openSegments: number;
+  readonly segmentDrops: number;
+  readonly lateSpans: number;
 }
 
 export interface DeliveryService {
@@ -92,32 +98,21 @@ export const deliveryLayer = (input: DeliveryOptions) =>
       const disabledExporters = new WeakSet<SpanExporter>();
       let stopping = false;
 
-      const processBatch = (incoming: ReadonlyArray<FlowSpan>) =>
-        Effect.suspend(() => {
-          const retained: Array<FlowSpan> = [];
-          for (const span of incoming) {
-            const httpStatus = readHttpStatus(span);
-            const decision = decideSampling(options.sampling, {
-              operation: span.operation,
-              outcome: span.outcome,
-              durationMs: span.durationMs,
-              ...(httpStatus === undefined ? {} : { httpStatus }),
-              deterministicValue: normalizeRatio(
-                options.deterministicValue?.(span) ?? deterministicRatio(span.traceId),
-              ),
-            });
-            if (decision.keep) retained.push(span);
-            else health.dropped++;
-          }
-          health.sampled += retained.length;
-          if (retained.length === 0 || options.exporters.length === 0) return Effect.void;
-          const batch: SpanBatch = [retained[0]!, ...retained.slice(1)];
-          return Effect.forEach(
-            options.exporters,
-            (exporter) => exportWithRetry(exporter, batch, options, health, disabledExporters),
-            { concurrency: "unbounded", discard: true },
-          );
-        });
+      const exportBatch = (batch: SpanBatch) =>
+        options.exporters.length === 0
+          ? Effect.void
+          : Effect.forEach(
+              options.exporters,
+              (exporter) => exportWithRetry(exporter, batch, options, health, disabledExporters),
+              { concurrency: "unbounded", discard: true },
+            );
+      const stager = makeSegmentStager({
+        config: options.staging,
+        sampling: options.sampling,
+        deterministicValue: options.deterministicValue,
+        emit: exportBatch,
+        health,
+      });
 
       const flushExporters = Effect.forEach(
         options.exporters,
@@ -128,16 +123,13 @@ export const deliveryLayer = (input: DeliveryOptions) =>
 
       const drain = Effect.gen(function* () {
         const queued = yield* Queue.clear(spans);
-        for (let offset = 0; offset < queued.length; offset += options.maxBatchSize) {
-          yield* processBatch(queued.slice(offset, offset + options.maxBatchSize));
-        }
+        for (const span of queued) yield* stager.accept(span, yield* Clock.currentTimeMillis);
       });
 
       const consumer = consumerLoop(
         spans,
         controls,
-        options,
-        processBatch,
+        stager,
         drain,
         flushExporters,
         shutdownDone,
@@ -205,7 +197,9 @@ export const deliveryLayer = (input: DeliveryOptions) =>
         },
       });
       const service = Delivery.of({
-        health: Effect.sync(() => snapshotHealth(health, Queue.sizeUnsafe(spans))),
+        health: Effect.sync(() =>
+          snapshotHealth(health, Queue.sizeUnsafe(spans), stager.openCount()),
+        ),
         flush,
         shutdown,
       });
@@ -216,21 +210,33 @@ export const deliveryLayer = (input: DeliveryOptions) =>
 function consumerLoop(
   spans: Queue.Queue<FlowSpan>,
   controls: Queue.Queue<Control>,
-  options: DeliveryOptions,
-  processBatch: (batch: ReadonlyArray<FlowSpan>) => Effect.Effect<void>,
+  stager: SegmentStager,
   drain: Effect.Effect<void>,
   flushExporters: Effect.Effect<void>,
   shutdownDone: Deferred.Deferred<void>,
 ): Effect.Effect<void> {
-  const next = Effect.raceFirst(
-    Queue.take(spans).pipe(Effect.map((span): Next => ({ _tag: "Span", span }))),
-    Queue.take(controls).pipe(Effect.map((control): Next => ({ _tag: "Control", control }))),
-  );
   return Effect.gen(function* () {
     while (true) {
-      const item = yield* next;
+      const now = yield* Clock.currentTimeMillis;
+      const next = Effect.raceFirst(
+        Queue.take(spans).pipe(Effect.map((span): Next => ({ _tag: "Span", span }))),
+        Queue.take(controls).pipe(Effect.map((control): Next => ({ _tag: "Control", control }))),
+      );
+      const nextDeadline = stager.nextDeadline(now);
+      const maybeItem =
+        nextDeadline === undefined
+          ? Option.some(yield* next)
+          : yield* next.pipe(
+              Effect.timeoutOption(Duration.millis(Math.max(0, nextDeadline - now))),
+            );
+      if (Option.isNone(maybeItem)) {
+        yield* stager.finalizeDue(yield* Clock.currentTimeMillis);
+        continue;
+      }
+      const item = maybeItem.value;
       if (item._tag === "Control") {
         yield* drain;
+        yield* stager.finalizeAll(yield* Clock.currentTimeMillis);
         yield* flushExporters;
         if (item.control._tag === "Shutdown") {
           yield* Deferred.succeed(shutdownDone, undefined);
@@ -239,31 +245,7 @@ function consumerLoop(
         yield* Deferred.succeed(item.control.done, undefined);
         continue;
       }
-      const batch: Array<FlowSpan> = [item.span];
-      const started = yield* Clock.currentTimeNanos;
-      const maxAgeNanos = Duration.toNanosUnsafe(options.maxBatchAge);
-      while (batch.length < options.maxBatchSize) {
-        const elapsed = (yield* Clock.currentTimeNanos) - started;
-        const remaining = maxAgeNanos - elapsed;
-        if (remaining <= 0n) break;
-        const following = yield* next.pipe(Effect.timeoutOption(Duration.nanos(remaining)));
-        if (Option.isNone(following)) break;
-        if (following.value._tag === "Span") {
-          batch.push(following.value.span);
-          continue;
-        }
-        yield* processBatch(batch);
-        yield* drain;
-        yield* flushExporters;
-        if (following.value.control._tag === "Shutdown") {
-          yield* Deferred.succeed(shutdownDone, undefined);
-          return;
-        }
-        yield* Deferred.succeed(following.value.control.done, undefined);
-        batch.length = 0;
-        break;
-      }
-      if (batch.length > 0) yield* processBatch(batch);
+      yield* stager.accept(item.span, yield* Clock.currentTimeMillis);
     }
   });
 }
@@ -352,17 +334,6 @@ function retryDelay(policy: RetryPolicy, attempt: number, exporter: string): Dur
   return Duration.millis(Math.max(0, base * factor));
 }
 
-function deterministicRatio(traceId: string): number {
-  return Number.parseInt(traceId.slice(0, 13), 16) / 0xfffffffffffff;
-}
-
-function readHttpStatus(span: FlowSpan): number | undefined {
-  const value = span.attributes["http.response.status_code"];
-  return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599
-    ? value
-    : undefined;
-}
-
 function normalizeRatio(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
@@ -377,7 +348,11 @@ function safeExporterName(exporter: SpanExporter): string {
   }
 }
 
-function validateOptions(options: DeliveryOptions): DeliveryOptions {
+type ResolvedDeliveryOptions = Omit<DeliveryOptions, "staging"> & {
+  readonly staging: SegmentStagingConfigType;
+};
+
+function validateOptions(options: DeliveryOptions): ResolvedDeliveryOptions {
   if (!Number.isInteger(options.capacity) || options.capacity < 1)
     throw new RangeError("capacity must be positive");
   if (!Number.isInteger(options.maxBatchSize) || options.maxBatchSize < 1)
@@ -395,8 +370,24 @@ function validateOptions(options: DeliveryOptions): DeliveryOptions {
     sampling: normalizeSamplingConfig(
       Schema.decodeUnknownSync(SamplingConfig)(options.sampling, { onExcessProperty: "error" }),
     ),
+    staging: Schema.decodeUnknownSync(SegmentStagingConfig)(
+      options.staging ?? defaultSegmentStaging,
+      { onExcessProperty: "error" },
+    ),
   };
 }
+
+const defaultSegmentStaging: SegmentStagingConfigType = {
+  maxOpenSegments: 1_024,
+  maxSpansPerSegment: 256,
+  maxBytesPerSegment: 4_194_304,
+  maxTotalBytes: 67_108_864,
+  rootGraceMs: 100,
+  maxSegmentAgeMs: 60_000,
+  overflow: "drop-oldest",
+  decisionCacheCapacity: 2_048,
+  decisionCacheMaxAgeMs: 60_000,
+};
 
 interface MutableHealth {
   accepting: boolean;
@@ -410,6 +401,8 @@ interface MutableHealth {
   attemptTimeouts: number;
   disabledExporters: number;
   flushTimeouts: number;
+  segmentDrops: number;
+  lateSpans: number;
 }
 
 function makeHealth(): MutableHealth {
@@ -425,9 +418,15 @@ function makeHealth(): MutableHealth {
     attemptTimeouts: 0,
     disabledExporters: 0,
     flushTimeouts: 0,
+    segmentDrops: 0,
+    lateSpans: 0,
   };
 }
 
-function snapshotHealth(health: MutableHealth, queueDepth: number): DeliveryHealthSnapshot {
-  return { ...health, queueDepth };
+function snapshotHealth(
+  health: MutableHealth,
+  queueDepth: number,
+  openSegments: number,
+): DeliveryHealthSnapshot {
+  return { ...health, queueDepth, openSegments };
 }

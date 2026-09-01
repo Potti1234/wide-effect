@@ -9,6 +9,11 @@ overflow or export failure, not isolated retry noise. Treat an exporter outage a
 observability: requests continue, memory remains bounded, and shutdown terminates at its configured
 limit.
 
+Size segment staging from the documented limits: the hard ceiling is `maxTotalBytes` plus queue
+capacity times the maximum encoded `FlowSpan`, decision-cache entries, and small map overhead. Monitor
+`openSegments`, `segmentDrops`, `lateSpans`, overflow, and dropped-span totals without attaching trace
+or segment IDs as metric labels.
+
 For incident lookup, store or return trace/support IDs separately from authentication. Persist the
 versioned `FlowSpan` envelope only after decoding it, index consumer-owned lookup fields, and define
 retention locally. The NDJSON exporter is append-only but does not promise `fsync`; the OTLP adapter is

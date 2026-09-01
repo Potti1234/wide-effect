@@ -22,6 +22,23 @@ export const HttpOutcomePolicy = Schema.Struct({
 });
 export type HttpOutcomePolicy = typeof HttpOutcomePolicy.Type;
 
+const PositiveInteger = Schema.Finite.check(
+  Schema.makeFilter((value) => Number.isInteger(value) || "must be an integer"),
+  Schema.isGreaterThan(0),
+);
+export const SegmentStagingConfig = Schema.Struct({
+  maxOpenSegments: PositiveInteger,
+  maxSpansPerSegment: PositiveInteger,
+  maxBytesPerSegment: PositiveInteger,
+  maxTotalBytes: PositiveInteger,
+  rootGraceMs: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
+  maxSegmentAgeMs: PositiveInteger,
+  overflow: Schema.Literals(["drop-oldest", "drop-newest"]),
+  decisionCacheCapacity: PositiveInteger,
+  decisionCacheMaxAgeMs: PositiveInteger,
+});
+export type SegmentStagingConfig = typeof SegmentStagingConfig.Type;
+
 export const SamplingConfig = Schema.Struct({
   successRatio: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
   slowThresholdMs: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),

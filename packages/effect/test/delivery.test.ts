@@ -1,4 +1,11 @@
-import { parseSpanId, parseTraceId, type FlowSpan, type SamplingConfig } from "@wide-effect/core";
+import {
+  parseSegmentId,
+  parseSpanId,
+  parseTraceId,
+  type FlowSpan,
+  type SamplingConfig,
+  type SegmentStagingConfig,
+} from "@wide-effect/core";
 import { expect } from "@effect/vitest";
 import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
@@ -115,6 +122,183 @@ describe("bounded delivery", () => {
     }).pipe(Effect.provide(deliveryLayer(options([output.exporter], { sampling }))));
   });
 
+  it.effect("keeps or drops each completed local segment coherently", () => {
+    const output = memoryExporter();
+    const sampling: SamplingConfig = {
+      successRatio: 0,
+      slowThresholdMs: 1_000,
+      retainOutcomes: ["failure"],
+      importantOperations: [],
+    };
+    return Effect.gen(function* () {
+      const sink = yield* CompletedSpanSink;
+      const delivery = yield* Delivery;
+      const kept = localSegment(10, [
+        { operation: "failed-child", outcome: "failure" },
+        { operation: "sibling", outcome: "success" },
+        { operation: "root", outcome: "success", root: true },
+      ]);
+      const dropped = localSegment(20, [
+        { operation: "routine-child", outcome: "success" },
+        { operation: "routine-root", outcome: "success", root: true },
+      ]);
+      for (const item of [...kept, ...dropped]) sink.unsafeOffer(item);
+      yield* delivery.flush;
+      expect(output.batches).toHaveLength(1);
+      expect(output.batches[0]?.map((item) => item.operation)).toEqual([
+        "failed-child",
+        "sibling",
+        "root",
+      ]);
+      expect((yield* delivery.health).dropped).toBe(2);
+    }).pipe(Effect.provide(deliveryLayer(options([output.exporter], { sampling }))));
+  });
+
+  it.effect("retains a complete returned-400 segment identically across exporter fan-out", () => {
+    const left = memoryExporter("left");
+    const right = memoryExporter("right");
+    const sampling: SamplingConfig = {
+      successRatio: 0,
+      slowThresholdMs: 1_000,
+      retainOutcomes: [],
+      importantOperations: [],
+      retainHttpStatuses: [400],
+    };
+    return Effect.gen(function* () {
+      const sink = yield* CompletedSpanSink;
+      const segment = localSegment(25, [
+        { operation: "status-child", outcome: "success" },
+        { operation: "status-sibling", outcome: "success" },
+        { operation: "status-root", outcome: "success", root: true },
+      ]);
+      const statusChild = segment[0];
+      if (statusChild === undefined) return;
+      segment[0] = {
+        ...statusChild,
+        attributes: { "http.response.status_code": 400 },
+      };
+      for (const item of segment) sink.unsafeOffer(item);
+      const delivery = yield* Delivery;
+      yield* delivery.flush;
+      expect(left.batches).toEqual(right.batches);
+      expect(left.batches[0]?.map((item) => item.operation)).toEqual([
+        "status-child",
+        "status-sibling",
+        "status-root",
+      ]);
+    }).pipe(Effect.provide(deliveryLayer(options([left.exporter, right.exporter], { sampling }))));
+  });
+
+  it.effect("caches segment decisions for detached late children", () => {
+    const output = memoryExporter();
+    return Effect.gen(function* () {
+      const sink = yield* CompletedSpanSink;
+      const delivery = yield* Delivery;
+      const [root] = localSegment(30, [{ operation: "kept-root", outcome: "success", root: true }]);
+      if (root === undefined) return;
+      sink.unsafeOffer(root);
+      yield* delivery.flush;
+      sink.unsafeOffer({
+        ...span(31, "late-child"),
+        traceId: root.traceId,
+        segmentId: root.segmentId,
+        parentSpanId: root.spanId,
+      });
+      yield* delivery.flush;
+      expect(output.batches).toHaveLength(2);
+      expect(output.batches[1]?.[0]?.attributes["wide.segment.late"]).toBe(true);
+      expect((yield* delivery.health).lateSpans).toBe(1);
+    }).pipe(Effect.provide(deliveryLayer(options([output.exporter]))));
+  });
+
+  it.effect("keeps same-trace local segments separate and bounds open segments", () => {
+    const output = memoryExporter();
+    return Effect.gen(function* () {
+      const sink = yield* CompletedSpanSink;
+      const first = localSegment(32, [
+        { operation: "first-root", outcome: "success", root: true },
+      ])[0];
+      const second = localSegment(33, [
+        { operation: "second-root", outcome: "success", root: true },
+      ])[0];
+      if (first === undefined || second === undefined) return;
+      sink.unsafeOffer(first);
+      sink.unsafeOffer({ ...second, traceId: first.traceId });
+      const delivery = yield* Delivery;
+      yield* delivery.flush;
+      expect(output.batches.flat().map((item) => item.operation)).toEqual(["first-root"]);
+      const health = yield* delivery.health;
+      expect(health.segmentDrops).toBe(1);
+      expect(health.dropped).toBe(1);
+    }).pipe(
+      Effect.provide(
+        deliveryLayer(
+          options([output.exporter], {
+            staging: staging({ maxOpenSegments: 1, overflow: "drop-newest" }),
+          }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("retains a bounded critical subset when a segment exceeds its span limit", () => {
+    const output = memoryExporter();
+    const sampling: SamplingConfig = {
+      successRatio: 0,
+      slowThresholdMs: 1_000,
+      retainOutcomes: ["failure"],
+      importantOperations: [],
+    };
+    return Effect.gen(function* () {
+      const sink = yield* CompletedSpanSink;
+      const delivery = yield* Delivery;
+      const segment = localSegment(40, [
+        { operation: "failed", outcome: "failure" },
+        { operation: "routine", outcome: "success" },
+        { operation: "bounded-root", outcome: "success", root: true },
+      ]);
+      for (const item of segment) sink.unsafeOffer(item);
+      yield* delivery.flush;
+      expect(output.batches[0]?.map((item) => item.operation)).toEqual(["failed", "bounded-root"]);
+      const root = output.batches[0]?.find((item) => item.operation === "bounded-root");
+      expect(root?.attributes["wide.segment.dropped_spans"]).toBe(1);
+      expect((yield* delivery.health).dropped).toBe(1);
+    }).pipe(
+      Effect.provide(
+        deliveryLayer(
+          options([output.exporter], {
+            sampling,
+            staging: staging({ maxSpansPerSegment: 2 }),
+          }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("finalizes a missing-root segment at its hard maximum age", () => {
+    const output = memoryExporter();
+    return Effect.gen(function* () {
+      const sink = yield* CompletedSpanSink;
+      sink.unsafeOffer({
+        ...span(50, "missing-root-child", { outcome: "failure" }),
+        segmentId: parseSegmentId("f".repeat(16)),
+        parentSpanId: parseSpanId("e".repeat(16)),
+      });
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 millis");
+      yield* Effect.yieldNow;
+      expect(output.batches.flat().map((item) => item.operation)).toEqual(["missing-root-child"]);
+    }).pipe(
+      Effect.provide(
+        deliveryLayer(
+          options([output.exporter], {
+            staging: staging({ maxSegmentAgeMs: 10 }),
+          }),
+        ),
+      ),
+    );
+  });
+
   it.effect("maps trace identifiers across the full deterministic sampling range", () => {
     const output = memoryExporter();
     const sampling: SamplingConfig = {
@@ -133,7 +317,11 @@ describe("bounded delivery", () => {
       yield* delivery.flush;
       expect(output.batches).toHaveLength(0);
       expect((yield* delivery.health).dropped).toBe(1);
-    }).pipe(Effect.provide(deliveryLayer(options([output.exporter], { sampling }))));
+    }).pipe(
+      Effect.provide(
+        deliveryLayer(options([output.exporter], { sampling, deterministicValue: () => 1 })),
+      ),
+    );
   });
 
   it.effect("retries on a deterministic TestClock schedule", () => {
@@ -276,4 +464,42 @@ function span(
     attributes: {},
     events: [],
   };
+}
+
+function staging(overrides: Partial<SegmentStagingConfig> = {}): SegmentStagingConfig {
+  return {
+    maxOpenSegments: 16,
+    maxSpansPerSegment: 16,
+    maxBytesPerSegment: 1_000_000,
+    maxTotalBytes: 4_000_000,
+    rootGraceMs: 10,
+    maxSegmentAgeMs: 1_000,
+    overflow: "drop-oldest",
+    decisionCacheCapacity: 16,
+    decisionCacheMaxAgeMs: 1_000,
+    ...overrides,
+  };
+}
+
+function localSegment(
+  seed: number,
+  definitions: ReadonlyArray<{
+    readonly operation: string;
+    readonly outcome: FlowSpan["outcome"];
+    readonly root?: boolean;
+  }>,
+): Array<FlowSpan> {
+  const rootValue = seed + definitions.findIndex((definition) => definition.root);
+  const rootSpanId = parseSpanId(rootValue.toString(16).padStart(16, "0"));
+  const segmentId = parseSegmentId(rootSpanId);
+  const traceId = parseTraceId(seed.toString(16).padStart(32, "0"));
+  return definitions.map((definition, index) => {
+    const item = span(seed + index, definition.operation, { outcome: definition.outcome });
+    return {
+      ...item,
+      traceId,
+      segmentId,
+      ...(definition.root ? {} : { parentSpanId: rootSpanId }),
+    };
+  });
 }

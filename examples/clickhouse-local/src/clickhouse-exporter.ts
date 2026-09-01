@@ -48,6 +48,7 @@ export const makeClickHouseSpanExporter = (
             );
             const endpoint = new URL(config.endpoint);
             endpoint.searchParams.set("query", insertQuery);
+            endpoint.searchParams.set("date_time_input_format", "best_effort");
             let request = HttpClientRequest.post(endpoint.toString()).pipe(
               HttpClientRequest.setHeader("x-clickhouse-user", config.username),
               HttpClientRequest.setHeader("x-clickhouse-key", config.password),

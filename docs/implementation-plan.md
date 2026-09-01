@@ -12,6 +12,12 @@ The plan is executable in order. A phase is complete only when its listed eviden
 acceptance criteria pass. Discoveries made in Fractal must be reflected back into this library rather
 than patched only in the application.
 
+The production-hardening workstreams are implemented through the consumer-owned ClickHouse/triage
+proof. Current evidence is 113 package tests, six deterministic ClickHouse-example tests, packed
+rc.108 and beta.102 consumer checks, the correlated full-stack example, and the opt-in Docker proof
+documented in `examples/clickhouse-local/RUNBOOK.md`. Fractal migration and LowkeySec validation remain
+separate repository work and are not implied complete here.
+
 ## Fixed design decisions
 
 1. Effect owns execution context and lifecycle. The library builds on Effect spans, loggers,

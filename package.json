@@ -10,6 +10,7 @@
     "build": "tsc -b",
     "example:check": "bun run --cwd examples/correlated-fullstack typecheck && bun run --cwd examples/clickhouse-local typecheck && bun run --cwd examples/clickhouse-local test && bun run example:fullstack",
     "example:fullstack": "bun run --cwd examples/correlated-fullstack start",
+    "example:clickhouse:docker": "bun run --cwd examples/clickhouse-local docker:proof",
     "clean": "tsc -b --clean",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",

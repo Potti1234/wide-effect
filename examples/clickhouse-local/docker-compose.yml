@@ -1,0 +1,23 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    environment:
+      CLICKHOUSE_USER: wide_effect
+      CLICKHOUSE_PASSWORD: local-only-wide-effect
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "127.0.0.1:18123:8123"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "clickhouse-client --user wide_effect --password local-only-wide-effect --query 'SELECT 1' | grep -q 1",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+
+volumes:
+  clickhouse-data:

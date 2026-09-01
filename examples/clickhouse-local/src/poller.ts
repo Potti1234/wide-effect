@@ -7,6 +7,9 @@ const MachineName = Schema.String.check(
   Schema.isPattern(/^[A-Za-z][A-Za-z0-9_.:-]*$/),
 );
 const BoundedNames = Schema.Array(MachineName).check(Schema.isMaxLength(32));
+const BoundedOperations = Schema.Array(
+  Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+).check(Schema.isMaxLength(32));
 const Statuses = Schema.Array(
   Schema.Finite.check(
     Schema.makeFilter((value) => Number.isInteger(value) || "status must be an integer"),
@@ -21,7 +24,7 @@ const PositiveInteger = Schema.Finite.check(
 export const AlertRule = Schema.Struct({
   id: MachineName,
   service: MachineName,
-  operations: Schema.optionalKey(BoundedNames),
+  operations: Schema.optionalKey(BoundedOperations),
   statusCodes: Schema.optionalKey(Statuses),
   failureCodes: Schema.optionalKey(BoundedNames),
   minimumOccurrences: PositiveInteger.check(Schema.isLessThanOrEqualTo(10_000)),

@@ -48,7 +48,9 @@ const workerLayer = runtimeLayer("example-worker");
 
 const workerApp = Effect.gen(function* () {
   yield* Effect.annotateCurrentSpan("example.job.id", "job-42");
-  yield* Effect.logInfo("worker accepted job", { "example.queue": "default" });
+  yield* Effect.logInfo("worker.job.accepted").pipe(
+    Effect.annotateLogs({ "example.queue": "default" }),
+  );
   yield* Effect.withSpan(Effect.void, "Worker.persistResult", {
     attributes: { "example.result": "stored" },
   });
@@ -77,7 +79,9 @@ const apiApp = Effect.gen(function* () {
     // The key is rejected before it can enter the completed span.
     "example.api.token": "secret-that-must-not-survive",
   });
-  yield* Effect.logInfo("API validated request", { "example.route": "/jobs" });
+  yield* Effect.logInfo("api.request.validated").pipe(
+    Effect.annotateLogs({ "example.route": "/jobs" }),
+  );
   const workerClient = withTraceStatePropagation(workerTransport);
   yield* workerClient.post("https://worker.example.test/jobs");
   return HttpServerResponse.empty();

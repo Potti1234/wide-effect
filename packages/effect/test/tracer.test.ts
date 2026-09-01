@@ -206,6 +206,60 @@ describe("wide Effect tracer", () => {
     }).pipe(Effect.provide(makeTestLayer())),
   );
 
+  it.effect("keeps semantic log names and safe structured annotations", () =>
+    Effect.gen(function* () {
+      yield* Effect.logInfo("worker.lease.claimed").pipe(
+        Effect.annotateLogs({ "test.run.id": "run-1", authorization: "never-export" }),
+        Effect.withSpan("logged"),
+      );
+      const spans = yield* InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
+      const logged = operation(spans, "logged");
+      expect(logged.events).toHaveLength(1);
+      expect(logged.events[0]).toMatchObject({
+        name: "worker.lease.claimed",
+        level: "info",
+        attributes: { "test.run.id": "run-1", "effect.logLevel": "INFO" },
+      });
+      expect(JSON.stringify(logged)).not.toContain("never-export");
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("replaces unsafe log messages and removes formatted causes", () =>
+    Effect.gen(function* () {
+      const sentinel = "secret-never-export-log-ingress";
+      yield* Effect.logInfo("request.failed", {
+        authorization: sentinel,
+        cookie: sentinel,
+        token: sentinel,
+        password: sentinel,
+        prompt: sentinel,
+        toolOutput: sentinel,
+        terminalOutput: sentinel,
+      }).pipe(Effect.withSpan("multi-argument"));
+      yield* Effect.logInfo(`https://user:${sentinel}@example.test/private?token=${sentinel}`).pipe(
+        Effect.withSpan("url-message"),
+      );
+      yield* Effect.logInfo(`prose with whitespace ${sentinel}`).pipe(Effect.withSpan("prose"));
+      yield* Effect.logInfo("x".repeat(129)).pipe(Effect.withSpan("overlong"));
+      yield* Effect.fail(sentinel).pipe(
+        Effect.ignore({ log: "Error", message: "request.failed" }),
+        Effect.withSpan("failure-log"),
+      );
+      const spans = yield* InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
+      for (const name of ["multi-argument", "url-message", "prose", "overlong"]) {
+        expect(operation(spans, name).events).toHaveLength(1);
+        expect(operation(spans, name).events[0]?.name).toBe("effect.log");
+      }
+      const failure = operation(spans, "failure-log");
+      expect(failure.events).toHaveLength(1);
+      expect(failure.events[0]?.name).toBe("request.failed");
+      expect(failure.events[0]?.attributes["effect.cause"]).toBeUndefined();
+      expect(JSON.stringify(spans)).not.toContain(sentinel);
+      for (const span of spans)
+        expect(() => Schema.decodeUnknownSync(FlowSpan)(span)).not.toThrow();
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
   it.effect("uses a safe no-op sink when no sink is provided", () => {
     let next = 100;
     const dependencies = Layer.mergeAll(

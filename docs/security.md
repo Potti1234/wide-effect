@@ -10,6 +10,13 @@ with opaque summaries. Consumers still must allowlist application fields: do not
 authorization headers, credentials, tokens, prompts, tool or terminal output, source content, or
 arbitrary state.
 
+Persisted Effect log events use a static semantic name such as `worker.lease.claimed` and structured
+values supplied with `Effect.annotateLogs`. Names must be lower-case dot-separated segments and are
+bounded to 128 characters; unsafe, prose, URL-shaped, multi-argument, or dynamic messages become
+`effect.log`. Pretty-printed causes are discarded at the tracer boundary. An optional human logger
+may still render the original application arguments to its own output, which is outside the
+canonical telemetry contract and must be secured by the consuming application.
+
 Foldkit capture never reads or exports the Model. It records approved Message/Command metadata in a
 count-, byte-, and age-bounded timeline. Diagnostic upload endpoints remain consumer-owned and must
 authenticate the caller, authorize trace access, enforce retention, decode the bundle, and apply a

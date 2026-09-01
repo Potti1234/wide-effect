@@ -14,6 +14,7 @@ import {
 import { Cause, Context, Effect, Exit, Layer, Option, Schema, Tracer } from "effect";
 import { ObservabilityConfig } from "./config.js";
 import { SpanIdGenerator } from "./ids.js";
+import { sanitizeSpanEvent } from "./log-event.js";
 import { CompletedSpanSink, type CompletedSpanSinkService } from "./sink.js";
 
 export const tracerLayer = Layer.effect(
@@ -70,13 +71,15 @@ class WideSpan implements Tracer.Span {
   }
 
   event(name: string, startTime: bigint, attributes: Record<string, unknown> = {}): void {
-    if (!this.ended)
+    if (!this.ended) {
+      const sanitized = sanitizeSpanEvent(name, attributes, this.config.attributePolicy);
       this.events.push({
-        name,
+        name: sanitized.name,
         startTime,
-        attributes: normalizeAttributes(attributes, this.config.attributePolicy),
+        attributes: sanitized.attributes,
         sequence: this.events.length,
       });
+    }
   }
 
   addLinks(links: ReadonlyArray<Tracer.SpanLink>): void {

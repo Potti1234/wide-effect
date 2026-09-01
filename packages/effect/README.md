@@ -2,6 +2,16 @@
 
 Effect-native tracing and export primitives for wide-effect.
 
+Use stable semantic log names and annotations for queryable span events:
+
+```ts
+Effect.logInfo("worker.run.claimed").pipe(Effect.annotateLogs({ "app.run.id": runId }));
+```
+
+The tracer replaces unsafe or dynamic log messages with `effect.log` and never persists Effect's
+pretty-printed cause. A configured human logger still receives the original application message and
+therefore remains an application-owned output boundary.
+
 The main entry point is browser-safe and exports the exporter contract, fan-out composition,
 in-memory exporter, and direct JSON console exporter. Import the append-only NDJSON and OTLP/HTTP JSON
 adapters from `@wide-effect/effect/server`. NDJSON requires Effect's `FileSystem` service; OTLP

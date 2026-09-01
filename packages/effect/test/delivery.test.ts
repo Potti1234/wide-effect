@@ -122,6 +122,31 @@ describe("bounded delivery", () => {
     }).pipe(Effect.provide(deliveryLayer(options([output.exporter], { sampling }))));
   });
 
+  it.effect("always retains explicitly important and audit spans", () => {
+    const output = memoryExporter();
+    const sampling: SamplingConfig = {
+      successRatio: 0,
+      slowThresholdMs: 1_000,
+      retainOutcomes: [],
+      importantOperations: [],
+    };
+    return Effect.gen(function* () {
+      const sink = yield* CompletedSpanSink;
+      const delivery = yield* Delivery;
+      sink.unsafeOffer({
+        ...span(6, "audit"),
+        attributes: {
+          "wide.sampling.important": true,
+          "wide.audit": true,
+          "wide.sampling.reason": "security decision",
+        },
+      });
+      yield* delivery.flush;
+      expect(output.batches.flat().map((item) => item.operation)).toEqual(["audit"]);
+      expect((yield* delivery.health).pipeline.retained).toBe(1);
+    }).pipe(Effect.provide(deliveryLayer(options([output.exporter], { sampling }))));
+  });
+
   it.effect("keeps or drops each completed local segment coherently", () => {
     const output = memoryExporter();
     const sampling: SamplingConfig = {

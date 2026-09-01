@@ -3,7 +3,9 @@
 Instrumentation creates every meaningful span. Tail sampling decides only after completion, when
 outcome and duration are known. Configured failures, slow operations, and important operations or
 actors are retained; routine successful traces use a deterministic decision so tests and incident
-comparisons are repeatable.
+comparisons are repeatable. `markImportant` and `markAudit` retain the entire local segment through
+the same redaction, bounds, queue, and exporter path; their optional reason remains span evidence and
+never becomes a metric label.
 
 Each tracer-created span carries a local `segmentId`. A local root—or a span continued from an
 external parent—starts a segment using its own span identity; descendants created by the same tracer

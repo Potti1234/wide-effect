@@ -23,8 +23,11 @@ import {
   idGeneratorLayer,
   inMemoryCompletedSpanSinkLayer,
   loggerLayer,
+  markAudit,
+  markImportant,
   noopCompletedSpanSinkLayer,
   tracerLayer,
+  withWideSpan,
   withInteractionId,
 } from "../src/index.js";
 
@@ -130,6 +133,41 @@ describe("wide Effect tracer", () => {
       expect(messageReads).toBe(0);
       expect(JSON.stringify(spans)).not.toContain(sentinel);
       expect(JSON.stringify(spans)).not.toContain("wide.failure");
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("enriches exactly one Effect-owned wide span and preserves typed failures", () =>
+    Effect.gen(function* () {
+      yield* Effect.fail({ _tag: "ClaimBusy" as const }).pipe(
+        withWideSpan("worker.run.claim", {
+          kind: "consumer",
+          attributes: { "test.run.id": "run-1" },
+          audit: true,
+          reason: "lease decision",
+          failure: () => ({
+            category: "conflict",
+            code: "run.claim_busy",
+            retryable: true,
+          }),
+        }),
+        Effect.exit,
+      );
+      yield* markImportant("safe outside a span");
+      yield* markAudit("safe outside a span");
+      const spans = yield* InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
+      expect(spans).toHaveLength(1);
+      const completed = operation(spans, "worker.run.claim");
+      expect(completed.kind).toBe("consumer");
+      expect(completed.attributes["test.run.id"]).toBe("run-1");
+      expect(completed.attributes["wide.sampling.important"]).toBe(true);
+      expect(completed.attributes["wide.sampling.reason"]).toBe("lease decision");
+      expect(completed.attributes["wide.audit"]).toBe(true);
+      expect(completed.failure).toMatchObject({
+        type: "typed",
+        category: "conflict",
+        code: "run.claim_busy",
+        retryable: true,
+      });
     }).pipe(Effect.provide(makeTestLayer())),
   );
 

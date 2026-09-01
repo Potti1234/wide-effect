@@ -99,6 +99,9 @@ function withSanitizedPath(policy: AttributePolicy, enabled: boolean): Attribute
   const reservedKeys = [
     ...Object.values(failureAttributeKeys),
     ...Object.values(correlationAttributeKeys),
+    "wide.sampling.important",
+    "wide.sampling.reason",
+    "wide.audit",
     "wide.dropped.attributes",
     "wide.dropped.events",
     "wide.dropped.links",

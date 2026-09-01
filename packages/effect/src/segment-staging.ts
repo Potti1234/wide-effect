@@ -7,6 +7,7 @@ import {
 } from "@wide-effect/core";
 import { Effect } from "effect";
 import type { SpanBatch } from "./exporter.js";
+import { retentionAttributeKeys } from "./helpers.js";
 
 interface OpenSegment {
   readonly id: string;
@@ -244,6 +245,8 @@ function decideSegment(
   customDeterministicValue?: ((span: FlowSpan) => number) | undefined,
 ): SamplingDecision {
   for (const span of spans) {
+    if (span.attributes[retentionAttributeKeys.important] === true)
+      return { keep: true, reason: "important" };
     const status = httpStatus(span);
     const decision = decideSampling(
       { ...config, successRatio: 0 },
@@ -272,6 +275,7 @@ function decideSegment(
 }
 
 function isRetainedEvidence(span: FlowSpan, config: SamplingConfig): boolean {
+  if (span.attributes[retentionAttributeKeys.important] === true) return true;
   const status = httpStatus(span);
   return decideSampling(
     { ...config, successRatio: 0 },

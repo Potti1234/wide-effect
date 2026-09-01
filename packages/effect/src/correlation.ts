@@ -27,6 +27,9 @@ export const annotateRequestId = Effect.fnUntraced(function* (requestId: Request
     yield* Effect.annotateCurrentSpan(correlationAttributeKeys.requestId, decoded.value);
 });
 
+export const setInteractionId = annotateInteractionId;
+export const setRequestId = annotateRequestId;
+
 /** Applies a validated interaction ID to every span created by the supplied local workflow. */
 export function withInteractionId<A, E, R>(
   effect: Effect.Effect<A, E, R>,

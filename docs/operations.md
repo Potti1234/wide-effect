@@ -41,8 +41,13 @@ Rejected live entries increment `wide.dropped.attributes`, `wide.dropped.events`
 
 For incident lookup, store or return trace/support IDs separately from authentication. Persist the
 versioned `FlowSpan` envelope only after decoding it, index consumer-owned lookup fields, and define
-retention locally. The NDJSON exporter is append-only but does not promise `fsync`; the OTLP adapter is
-server-only and sends canonical spans mapped to OTLP JSON.
+retention locally. The server-only NDJSON exporter serializes ownership, rotates before a configured
+byte or time limit, and deletes oldest archives to satisfy both count and byte retention. Every
+complete line is independently schema-decodable. On restart, a non-empty active file is archived, so
+a crash-damaged final line cannot contaminate new records; readers should ignore only an incomplete
+final archive line. Rotation or retention failure fails that exporter operation without changing a
+business Effect. `fsync` is opt-in and can materially reduce throughput. The OTLP adapter sends
+canonical spans mapped to OTLP JSON.
 
 Record deployment, commit, region, and instance metadata once in the runtime service configuration.
 Use those resource fields for rollout correlation, never as unbounded metric labels.

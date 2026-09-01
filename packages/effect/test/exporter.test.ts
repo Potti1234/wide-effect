@@ -1,6 +1,7 @@
-import { parseSpanId, parseTraceId, type FlowSpan } from "@wide-effect/core";
+import { decodeFlowSpan, parseSpanId, parseTraceId, type FlowSpan } from "@wide-effect/core";
 import { expect } from "@effect/vitest";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Option } from "effect";
+import { TestClock } from "effect/testing";
 import { describe, it } from "@effect/vitest";
 import {
   fanOutExporter,
@@ -139,6 +140,9 @@ describe("span exporters", () => {
       readonly options: { readonly flag?: FileSystem.OpenFlag; readonly mode?: number } | undefined;
     }> = [];
     const fileSystem = FileSystem.makeNoop({
+      makeDirectory: () => Effect.void,
+      exists: () => Effect.succeed(false),
+      chmod: () => Effect.void,
       writeFileString: (path, data, options) =>
         Effect.sync(() => {
           writes.push({ path, data, options });
@@ -148,11 +152,11 @@ describe("span exporters", () => {
       const exporter = yield* makeNdjsonSpanExporter({ path: "telemetry/spans.ndjson" });
       yield* exporter.export([span, { ...span, spanId: parseSpanId("fedcba9876543210") }]);
       yield* exporter.flush;
-      expect(writes).toHaveLength(1);
+      expect(writes).toHaveLength(2);
       expect(writes[0]?.path).toBe("telemetry/spans.ndjson");
       expect(writes[0]?.options?.flag).toBe("a");
       expect(writes[0]?.options?.mode).toBe(0o600);
-      const records = writes[0]?.data.trimEnd().split("\n").map(JSON.parse);
+      const records = writes.flatMap((write) => write.data.trimEnd().split("\n").map(JSON.parse));
       expect(records).toHaveLength(2);
       expect(records?.[0]).toEqual(span);
       yield* exporter.shutdown;
@@ -161,7 +165,7 @@ describe("span exporters", () => {
       expect(error.operation).toBe("export");
       const flushError = yield* Effect.flip(exporter.flush);
       expect(flushError.operation).toBe("flush");
-      expect(writes).toHaveLength(1);
+      expect(writes).toHaveLength(2);
     }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
   });
 
@@ -170,6 +174,9 @@ describe("span exporters", () => {
     let maximumActive = 0;
     const writes: Array<string> = [];
     const fileSystem = FileSystem.makeNoop({
+      makeDirectory: () => Effect.void,
+      exists: () => Effect.succeed(false),
+      chmod: () => Effect.void,
       writeFileString: (_path, data) =>
         Effect.gen(function* () {
           active++;
@@ -193,7 +200,126 @@ describe("span exporters", () => {
       expect(writes.flatMap((data) => data.trimEnd().split("\n"))).toHaveLength(2);
     }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
   });
+
+  it.effect("rotates partial restart tails and enforces byte and count retention", () => {
+    const files = new Map<string, string>([
+      ["telemetry/spans.ndjson", `${JSON.stringify(span)}\n{"partial"`],
+    ]);
+    const removed: Array<string> = [];
+    const modes: Array<number | undefined> = [];
+    const fileSystem = memoryFileSystem(files, {
+      removed,
+      onChmod: (_path, mode) => modes.push(mode),
+    });
+    const lineBytes = new TextEncoder().encode(`${JSON.stringify(span)}\n`).byteLength;
+    return Effect.gen(function* () {
+      const exporter = yield* makeNdjsonSpanExporter({
+        directory: "telemetry",
+        baseFilename: "spans.ndjson",
+        maxFileBytes: lineBytes + 1,
+        maxRetainedFiles: 1,
+      });
+      yield* exporter.export([span, { ...span, spanId: parseSpanId("fedcba9876543210") }]);
+      const archives = [...files.keys()].filter((path) => path.includes("spans.ndjson."));
+      expect(archives).toHaveLength(1);
+      expect(removed).toHaveLength(1);
+      expect(modes).toEqual([0o600, 0o600]);
+      for (const path of [...archives, "telemetry/spans.ndjson"]) {
+        const content = files.get(path) ?? "";
+        for (const line of content.trimEnd().split("\n"))
+          expect(decodeFlowSpan(JSON.parse(line))).toBeDefined();
+      }
+      expect([...files.values()].join("\n")).not.toContain('"partial"');
+      const forged = { ...span, attributes: { authorization: "Bearer never-write" } } as FlowSpan;
+      yield* Effect.flip(exporter.export([forged]));
+      expect([...files.values()].join("\n")).not.toContain("never-write");
+    }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+  });
+
+  it.effect("rotates on Effect Clock time and fsyncs each configured batch", () => {
+    const files = new Map<string, string>();
+    let syncs = 0;
+    const fileSystem = memoryFileSystem(files, { onSync: () => syncs++ });
+    return Effect.gen(function* () {
+      const exporter = yield* makeNdjsonSpanExporter({
+        path: "telemetry/spans.ndjson",
+        rotationInterval: "10 millis",
+        fsync: "each-batch",
+      });
+      yield* exporter.export([span]);
+      yield* TestClock.adjust("10 millis");
+      yield* exporter.export([{ ...span, spanId: parseSpanId("fedcba9876543210") }]);
+      expect([...files.keys()].filter((path) => path.includes("spans.ndjson."))).toHaveLength(1);
+      expect(syncs).toBe(2);
+    }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+  });
 });
+
+function memoryFileSystem(
+  files: Map<string, string>,
+  hooks: {
+    readonly removed?: Array<string>;
+    readonly onChmod?: (path: string, mode: number) => void;
+    readonly onSync?: () => void;
+  } = {},
+): FileSystem.FileSystem {
+  return FileSystem.makeNoop({
+    makeDirectory: () => Effect.void,
+    exists: (path) => Effect.succeed(files.has(path)),
+    stat: (path) => Effect.succeed(fileInfo(files.get(path) ?? "")),
+    readDirectory: (directory) =>
+      Effect.succeed(
+        [...files.keys()]
+          .filter((path) => path.startsWith(`${directory}/`))
+          .map((path) => path.slice(directory.length + 1)),
+      ),
+    rename: (from, to) =>
+      Effect.sync(() => {
+        const value = files.get(from) ?? "";
+        files.delete(from);
+        files.set(to, value);
+      }),
+    remove: (path) =>
+      Effect.sync(() => {
+        files.delete(path);
+        hooks.removed?.push(path);
+      }),
+    chmod: (path, mode) => Effect.sync(() => hooks.onChmod?.(path, mode)),
+    writeFileString: (path, data) =>
+      Effect.sync(() => files.set(path, `${files.get(path) ?? ""}${data}`)),
+    open: (path) =>
+      Effect.succeed({
+        [FileSystem.FileTypeId]: FileSystem.FileTypeId,
+        stat: Effect.succeed(fileInfo(files.get(path) ?? "")),
+        seek: () => Effect.succeed(FileSystem.Size(0)),
+        sync: Effect.sync(() => hooks.onSync?.()),
+        read: () => Effect.succeed(FileSystem.Size(0)),
+        readAlloc: () => Effect.succeed(Option.none()),
+        truncate: () => Effect.void,
+        write: () => Effect.succeed(FileSystem.Size(0)),
+        writeAll: () => Effect.void,
+      }),
+  });
+}
+
+function fileInfo(content: string): FileSystem.File.Info {
+  return {
+    type: "File",
+    mtime: Option.none(),
+    atime: Option.none(),
+    birthtime: Option.none(),
+    dev: 0,
+    ino: Option.none(),
+    mode: 0o600,
+    nlink: Option.none(),
+    uid: Option.none(),
+    gid: Option.none(),
+    rdev: Option.none(),
+    size: FileSystem.Size(new TextEncoder().encode(content).byteLength),
+    blksize: Option.none(),
+    blocks: Option.none(),
+  };
+}
 
 function failingExporter(name: string, attempted: () => void): SpanExporter {
   const failure = (operation: "export" | "flush" | "shutdown") =>

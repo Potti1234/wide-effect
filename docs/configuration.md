@@ -32,6 +32,13 @@ The main Effect entry point is browser-safe. Import NDJSON and OTLP/HTTP exporte
 `@wide-effect/effect/server`. Foldkit applications use `instrumentApplication`,
 `registerDevToolsObserver`, and `makeTimelineBuffer`; see the package README for registration order.
 
+Configure the server-only NDJSON exporter with a deployment-owned `directory` and safe
+`baseFilename`. Set `maxFileBytes`, `maxRetainedFiles`, and `maxRetainedBytes` so active plus archived
+disk use has an explicit ceiling. `rotationInterval` adds UTC-clock-based rotation. The default modes
+are `0700` for the directory and `0600` for files. `fsync` is `never` by default; choose `on-flush` or
+`each-batch` only when the durability benefit justifies the extra filesystem latency. The legacy
+single `path` option remains supported and derives the directory and base filename.
+
 Application configuration must supply service identity, environment, deployment/version, sampling,
 delivery bounds, exporter destinations, and an attribute allowlist. Secrets and credentials belong in
 consumer-owned configuration services and must never be attached as telemetry attributes.

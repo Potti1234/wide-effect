@@ -22,3 +22,19 @@
 During a staged migration, avoid installing two tracing loggers or tracers. If the legacy system must
 remain temporarily, adapt completed wide-effect spans at the exporter boundary instead of duplicating
 instrumentation inside business workflows.
+
+## Common evlog-style intents
+
+| Intent                        | wide-effect equivalent                            |
+| ----------------------------- | ------------------------------------------------- |
+| Add context during a request  | `annotate` the current Effect span                |
+| Emit a structured error       | `annotateFailure` plus the failed Effect exit     |
+| Produce one request event     | Complete the service/server span                  |
+| Retain an audit event         | `markAudit` or an audit-retained named span event |
+| Add environment context       | Decoded `ServiceMetadata` in `configLayer`        |
+| Use an ambient request logger | No equivalent; use Effect span/fiber context      |
+
+Use `Effect.logInfo("worker.run.claimed").pipe(Effect.annotateLogs(fields))`; an object is not a
+second log message. Keep source code outside telemetry. Authorized incident tooling fetches bounded
+repository context later and never writes prompts, source, tool output, or terminal output back into
+`FlowSpan`.

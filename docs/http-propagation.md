@@ -10,9 +10,17 @@ Browser propagation is explicit through `injectBrowserCarrier`; it does not patc
 requests are allowed by default. Cross-origin requests require an exact HTTP(S) origin in
 `allowedOrigins`.
 
+An optional branded interaction ID may be attached as `x-wide-interaction-id` only to those allowed
+origins. `w3cServerTracer` schema-validates it and treats it solely as untrusted correlation metadata.
+Use `withInteractionPropagation` explicitly for a downstream hop. Request IDs never propagate:
+`w3cServerTracerWithRequestId` discards inbound request-ID headers and calls the server-owned
+generator once per request. `withInteractionId` covers all spans in one local workflow, while
+`annotateRequestId` marks only the current request span.
+
 For cross-origin browser calls, configure the server to:
 
-- allow request headers `traceparent` and `tracestate`;
+- allow request headers `traceparent`, `tracestate`, and `x-wide-interaction-id` when interaction
+  correlation is enabled;
 - expose any response support identifier headers the application adds;
 - include the exact calling origin in `Access-Control-Allow-Origin` (credentials cannot use `*`).
 

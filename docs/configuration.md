@@ -23,6 +23,11 @@ not source callbacks from external configuration.
 statuses and ranges, validates them through Effect Schema, removes duplicate exact statuses, and
 merges overlapping or adjacent ranges.
 
+Use `withInteractionId` for a local correlated workflow and pass a branded interaction ID explicitly
+to browser or downstream HTTP propagation. Use `w3cServerTracerWithRequestId` with a server-owned
+branded ID generator for per-hop request correlation. Malformed values are omitted rather than
+making span completion fail.
+
 The main Effect entry point is browser-safe. Import NDJSON and OTLP/HTTP exporters only from
 `@wide-effect/effect/server`. Foldkit applications use `instrumentApplication`,
 `registerDevToolsObserver`, and `makeTimelineBuffer`; see the package README for registration order.

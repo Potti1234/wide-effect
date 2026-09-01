@@ -30,6 +30,8 @@ registerDevToolsObserver(
 `instrumentApplication` calls the original pure `init` and `update`, then applies public
 `Command.mapEffect` to returned commands. Foldkit itself creates the named Command span; wide-effect
 only annotates that existing span. It never changes `view`, Model, or Message schemas.
+The validated interaction annotation is promoted to the completed span's top-level `interactionId`;
+it is correlation metadata only and never an authorization input.
 
 ## DevTools registration
 
@@ -57,7 +59,8 @@ an optional existing Foldkit callback can still be delegated to synchronously.
 
 ## Browser propagation
 
-`injectCommandTraceHeaders` returns a new `Request` and never patches `fetch`. Same-origin is allowed
+`injectCommandTraceHeaders` returns a new `Request` and never patches `fetch`. Pass the command's
+branded interaction ID as its optional fourth argument when HTTP correlation is required. Same-origin is allowed
 by default. Extra destinations require exact origins such as `https://api.example.com`; lookalike
 subdomains and path-based policies are rejected. Allow and expose `traceparent`, `tracestate`, and the
 application's support-ID response headers in CORS configuration.

@@ -14,6 +14,7 @@ import {
 } from "@wide-effect/core";
 import { Cause, Context, Effect, Exit, Layer, Option, Schema, Tracer } from "effect";
 import { ObservabilityConfig } from "./config.js";
+import { promoteCorrelation } from "./correlation.js";
 import { readFailureAnnotation } from "./failure.js";
 import { SpanIdGenerator } from "./ids.js";
 import { sanitizeSpanEvent } from "./log-event.js";
@@ -122,6 +123,7 @@ class WideSpan implements Tracer.Span {
     exit: Exit.Exit<unknown, unknown>,
   ): FlowSpan {
     const rawAttributes = Object.fromEntries(this.attributes);
+    const correlation = promoteCorrelation(rawAttributes);
     const explicitFailure = readFailureAnnotation(rawAttributes);
     const httpStatus = readHttpStatus(rawAttributes);
     const outcome = classifyOutcome(exit, this.kind, httpStatus, this.config.httpOutcomePolicy);
@@ -142,6 +144,7 @@ class WideSpan implements Tracer.Span {
       ...(parent === undefined
         ? {}
         : { parentSpanId: Schema.decodeUnknownSync(SpanId)(parent.spanId) }),
+      ...correlation,
       service: this.config.service,
       operation: safeName(this.name, "unnamed-span"),
       kind: this.kind,

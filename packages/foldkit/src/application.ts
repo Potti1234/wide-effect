@@ -1,6 +1,7 @@
-import { normalizeAttributes, type SafeAttributes } from "@wide-effect/core";
-import { Effect } from "effect";
+import { InteractionId, normalizeAttributes, type SafeAttributes } from "@wide-effect/core";
+import { Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
+import { annotateInteractionId } from "@wide-effect/effect";
 
 export interface InstrumentApplicationOptions<Message> {
   readonly interactionId: () => string;
@@ -45,16 +46,25 @@ export const instrumentApplication = <
     messageTag: string,
     interactionId: string,
     summary: SafeAttributes,
-  ) =>
-    commands.map((command) =>
+  ) => {
+    const decodedInteractionId = Schema.decodeUnknownOption(InteractionId)(interactionId);
+    const annotateInteraction = Option.isNone(decodedInteractionId)
+      ? Effect.void
+      : annotateInteractionId(decodedInteractionId.value);
+    return commands.map((command) =>
       Command.mapEffect(command, (effect) =>
-        Effect.annotateCurrentSpan({
-          "foldkit.interaction.id": interactionId,
-          "foldkit.message.tag": messageTag,
-          ...prefixSummary(summary),
-        }).pipe(Effect.andThen(effect)),
+        annotateInteraction.pipe(
+          Effect.andThen(
+            Effect.annotateCurrentSpan({
+              "foldkit.message.tag": messageTag,
+              ...prefixSummary(summary),
+            }),
+          ),
+          Effect.andThen(effect),
+        ),
       ),
     );
+  };
   const summarize = (message: Message): SafeAttributes =>
     normalizeAttributes(options.summarizeMessage?.(message) ?? {}, {
       allowedPrefixes: options.allowedSummaryPrefixes ?? [],

@@ -1,4 +1,5 @@
 export * from "./config.js";
+export * from "./correlation.js";
 export * from "./delivery.js";
 export * from "./exporter.js";
 export * from "./failure.js";

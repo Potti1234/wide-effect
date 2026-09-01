@@ -1,5 +1,7 @@
 import {
   parseSpanId,
+  parseInteractionId,
+  parseRequestId,
   parseTraceId,
   parseTraceState,
   type HttpOutcomePolicy,
@@ -25,6 +27,7 @@ import {
   injectBrowserCarrier,
   tracerLayer,
   w3cServerTracer,
+  w3cServerTracerWithRequestId,
   withTraceStatePropagation,
 } from "../src/index.js";
 
@@ -90,6 +93,8 @@ describe("Effect HTTP propagation", () => {
     Effect.suspend(() => {
       let observedState = "missing";
       const sentinel = "secret-never-export-http-server";
+      const interactionId = parseInteractionId("interaction-server-1");
+      const requestId = parseRequestId("request-server-1");
       return Effect.gen(function* () {
         const request = HttpServerRequest.fromWeb(
           new Request(`https://api.example.test/items/${sentinel}?token=${sentinel}`, {
@@ -98,10 +103,12 @@ describe("Effect HTTP propagation", () => {
               tracestate: "vendor=state",
               authorization: `Bearer ${sentinel}`,
               cookie: `session=${sentinel}`,
+              "x-wide-interaction-id": interactionId,
+              "x-wide-request-id": "malformed inbound request id",
             },
           }),
         );
-        yield* w3cServerTracer(
+        yield* w3cServerTracerWithRequestId(() => requestId)(
           Effect.gen(function* () {
             const state = yield* CurrentTraceState;
             observedState = Option.getOrElse(state, () => "missing");
@@ -118,6 +125,8 @@ describe("Effect HTTP propagation", () => {
           kind: "server",
           traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           parentSpanId: "bbbbbbbbbbbbbbbb",
+          interactionId,
+          requestId,
         });
         expect(spans[0]?.attributes).toMatchObject({
           "http.request.method": "GET",
@@ -325,13 +334,16 @@ describe("Effect HTTP propagation", () => {
 
 describe("browser carrier injection", () => {
   it("defaults to same-origin and replaces caller correlation", () => {
+    const interactionId = parseInteractionId("interaction-browser-1");
     const injected = injectBrowserCarrier(
       new Request("https://app.example.test/api", { headers: { traceparent: "attacker" } }),
       carrier,
       { currentOrigin: "https://app.example.test" },
+      interactionId,
     );
     expect(injected.headers.get("traceparent")).toBe(upstream);
     expect(injected.headers.get("tracestate")).toBe("vendor=state");
+    expect(injected.headers.get("x-wide-interaction-id")).toBe(interactionId);
   });
 
   it("strips correlation outside the exact origin allowlist", () => {

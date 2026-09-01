@@ -1,11 +1,16 @@
 import {
   extractTraceCarrier,
   formatTraceParent,
+  InteractionId,
+  RequestId,
   parseTraceStateHeader,
   type TraceCarrier,
+  type InteractionId as InteractionIdType,
+  type RequestId as RequestIdType,
   type TraceState,
 } from "@wide-effect/core";
-import { Context, Effect, Option } from "effect";
+import { Context, Effect, Option, Schema } from "effect";
+import { annotateInteractionId, annotateRequestId } from "./correlation.js";
 import {
   Headers as EffectHeaders,
   HttpClient,
@@ -22,12 +27,34 @@ const correlationHeaders = [
   "x-b3-spanid",
   "x-b3-sampled",
   "x-b3-flags",
+  "x-wide-interaction-id",
+  "x-wide-request-id",
 ] as const;
 
 export const CurrentTraceState = Context.Reference<Option.Option<TraceState>>(
   "@wide-effect/effect/CurrentTraceState",
   { defaultValue: Option.none },
 );
+
+/** Adds a validated, server-generated request ID; inbound request IDs are always discarded. */
+export const w3cServerTracerWithRequestId = (
+  nextRequestId: () => RequestIdType,
+): typeof HttpMiddleware.tracer =>
+  HttpMiddleware.make((app) =>
+    w3cServerTracer(
+      Effect.suspend(() => {
+        let requestId: Option.Option<RequestIdType>;
+        try {
+          requestId = Schema.decodeUnknownOption(RequestId)(nextRequestId());
+        } catch {
+          requestId = Option.none();
+        }
+        return Option.isNone(requestId)
+          ? app
+          : annotateRequestId(requestId.value).pipe(Effect.andThen(app));
+      }),
+    ),
+  );
 
 /**
  * Validates W3C headers before delegating span ownership to Effect's built-in server tracer.
@@ -50,7 +77,13 @@ export const w3cServerTracer: typeof HttpMiddleware.tracer = HttpMiddleware.make
       }
     }
     const normalizedRequest = preserveAdapterMetadata(request, request.modify({ headers }));
-    return HttpMiddleware.tracer(app).pipe(
+    const interactionId = Schema.decodeUnknownOption(InteractionId)(
+      request.headers["x-wide-interaction-id"],
+    );
+    const correlatedApp = Option.isNone(interactionId)
+      ? app
+      : annotateInteractionId(interactionId.value).pipe(Effect.andThen(app));
+    return HttpMiddleware.tracer(correlatedApp).pipe(
       Effect.provideService(HttpServerRequest.HttpServerRequest, normalizedRequest),
       Effect.provideService(CurrentTraceState, traceState),
     );
@@ -88,6 +121,19 @@ export const withTraceStatePropagation = <E, R>(
     ),
   );
 
+/** Explicitly propagates untrusted interaction metadata; request IDs remain local to each hop. */
+export const withInteractionPropagation = <E, R>(
+  client: HttpClient.HttpClient.With<E, R>,
+  interactionId: InteractionIdType,
+): HttpClient.HttpClient.With<E, R> => {
+  const decoded = Schema.decodeUnknownOption(InteractionId)(interactionId);
+  return Option.isNone(decoded)
+    ? client
+    : HttpClient.mapRequest(client, (request) =>
+        HttpClientRequest.setHeader(request, "x-wide-interaction-id", decoded.value),
+      );
+};
+
 export interface BrowserOriginPolicy {
   readonly currentOrigin: string;
   readonly allowedOrigins?: ReadonlyArray<string>;
@@ -101,6 +147,7 @@ export function injectBrowserCarrier(
   request: Request,
   carrier: TraceCarrier,
   policy: BrowserOriginPolicy,
+  interactionId?: InteractionIdType,
 ): Request {
   const currentOrigin = parseOrigin(policy.currentOrigin);
   const destination = new URL(request.url).origin;
@@ -112,6 +159,9 @@ export function injectBrowserCarrier(
   if (allowed) {
     headers.set("traceparent", formatTraceParent(carrier.traceparent));
     if (carrier.tracestate !== undefined) headers.set("tracestate", carrier.tracestate);
+    const decodedInteractionId = Schema.decodeUnknownOption(InteractionId)(interactionId);
+    if (Option.isSome(decodedInteractionId))
+      headers.set("x-wide-interaction-id", decodedInteractionId.value);
   }
   return new Request(request, { headers });
 }

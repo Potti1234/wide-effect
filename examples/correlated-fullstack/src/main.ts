@@ -1,11 +1,21 @@
-import { parseSpanId, parseTraceId, type FlowSpan, type TraceCarrier } from "@wide-effect/core";
+import {
+  parseInteractionId,
+  parseRequestId,
+  parseSpanId,
+  parseTraceId,
+  type FlowSpan,
+  type TraceCarrier,
+} from "@wide-effect/core";
 import {
   CompletedSpanSink,
   CurrentTraceState,
+  annotateRequestId,
   completedSpanSinkLayer,
   configLayer,
   idGeneratorLayer,
   tracerLayer,
+  withInteractionId,
+  withInteractionPropagation,
   w3cServerTracer,
   withTraceStatePropagation,
 } from "@wide-effect/effect";
@@ -20,6 +30,9 @@ import {
 } from "effect/unstable/http";
 
 const collected: Array<FlowSpan> = [];
+const interactionId = parseInteractionId("interaction-42");
+const apiRequestId = parseRequestId("request-api-42");
+const workerRequestId = parseRequestId("request-worker-42");
 const sink = CompletedSpanSink.of({ unsafeOffer: (span) => collected.push(span) });
 
 let nextId = 1;
@@ -47,6 +60,7 @@ const apiLayer = runtimeLayer("example-api");
 const workerLayer = runtimeLayer("example-worker");
 
 const workerApp = Effect.gen(function* () {
+  yield* annotateRequestId(workerRequestId);
   yield* Effect.annotateCurrentSpan("example.job.id", "job-42");
   yield* Effect.logInfo("worker.job.accepted").pipe(
     Effect.annotateLogs({ "example.queue": "default" }),
@@ -74,6 +88,7 @@ const workerTransport = HttpClient.make((request) =>
 );
 
 const apiApp = Effect.gen(function* () {
+  yield* annotateRequestId(apiRequestId);
   yield* Effect.annotateCurrentSpan({
     "example.request.id": "request-42",
     // The key is rejected before it can enter the completed span.
@@ -82,7 +97,10 @@ const apiApp = Effect.gen(function* () {
   yield* Effect.logInfo("api.request.validated").pipe(
     Effect.annotateLogs({ "example.route": "/jobs" }),
   );
-  const workerClient = withTraceStatePropagation(workerTransport);
+  const workerClient = withInteractionPropagation(
+    withTraceStatePropagation(workerTransport),
+    interactionId,
+  );
   yield* workerClient.post("https://worker.example.test/jobs");
   return HttpServerResponse.empty();
 });
@@ -104,6 +122,7 @@ const callApi = Effect.gen(function* () {
       currentOrigin: "https://app.example.test",
       allowedOrigins: ["https://api.example.test"],
     },
+    interactionId,
   );
   return yield* w3cServerTracer(apiApp).pipe(
     Effect.provideService(HttpServerRequest.HttpServerRequest, HttpServerRequest.fromWeb(request)),
@@ -115,10 +134,10 @@ const callApi = Effect.gen(function* () {
 const program = callApi.pipe(
   Effect.withSpan("foldkit.command.SubmitJob", {
     attributes: {
-      "foldkit.interaction.id": "interaction-42",
       "foldkit.message.tag": "SubmitJob",
     },
   }),
+  (effect) => withInteractionId(effect, interactionId),
   Effect.provide(browserLayer),
 );
 
@@ -144,6 +163,20 @@ assertTraceTree(collected, {
     },
   ],
 });
+
+if (collected.some((span) => span.interactionId !== interactionId)) {
+  throw new Error("interaction correlation did not continue across every hop");
+}
+const requestIds = collected.flatMap((span) =>
+  span.requestId === undefined ? [] : [span.requestId],
+);
+if (
+  requestIds.length !== 2 ||
+  !requestIds.includes(apiRequestId) ||
+  !requestIds.includes(workerRequestId)
+) {
+  throw new Error("request IDs were not distinct per server hop");
+}
 
 const encoded = JSON.stringify(collected);
 if (encoded.includes("secret-that-must-not-survive")) {

@@ -24,8 +24,10 @@ const boundedId = <const Name extends string>(name: Name) =>
 
 export const InteractionId = boundedId("InteractionId");
 export type InteractionId = typeof InteractionId.Type;
+export const parseInteractionId = Schema.decodeUnknownSync(InteractionId);
 export const RequestId = boundedId("RequestId");
 export type RequestId = typeof RequestId.Type;
+export const parseRequestId = Schema.decodeUnknownSync(RequestId);
 
 export const TraceParent = Schema.Struct({
   version: Schema.Literal("00"),

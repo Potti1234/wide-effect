@@ -1,5 +1,7 @@
 import {
   FlowSpan,
+  parseInteractionId,
+  parseRequestId,
   parseSpanId,
   parseTraceId,
   type FlowSpan as FlowSpanType,
@@ -13,6 +15,8 @@ import {
   InMemoryCompletedSpans,
   annotateFailure,
   annotate,
+  annotateInteractionId,
+  annotateRequestId,
   configLayer,
   event,
   idGeneratorLayer,
@@ -20,6 +24,7 @@ import {
   loggerLayer,
   noopCompletedSpanSinkLayer,
   tracerLayer,
+  withInteractionId,
 } from "../src/index.js";
 
 const service = { name: "test-service", version: "1", environment: "test" } as const;
@@ -192,6 +197,42 @@ describe("wide Effect tracer", () => {
       const spans = yield* InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
       expect(operation(spans, "annotated").attributes).toMatchObject({ "test.visible": "yes" });
       expect(JSON.stringify(spans)).not.toContain("secret");
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("promotes validated correlation identifiers and strips reserved attributes", () =>
+    Effect.gen(function* () {
+      const interactionId = parseInteractionId("interaction-42");
+      const requestId = parseRequestId("request-api-42");
+      yield* Effect.gen(function* () {
+        yield* annotateInteractionId(interactionId);
+        yield* annotateRequestId(requestId);
+        yield* Effect.annotateCurrentSpan("test.requestId", "application-value");
+        yield* Effect.void.pipe(Effect.withSpan("correlated-child"));
+      }).pipe(
+        (effect) => withInteractionId(effect, interactionId),
+        Effect.withSpan("correlated-root"),
+      );
+      yield* Effect.gen(function* () {
+        yield* Effect.annotateCurrentSpan({
+          "wide.interaction.id": "invalid value with spaces",
+          "wide.request.id": "also invalid",
+        });
+      }).pipe(Effect.withSpan("invalid-correlation"));
+      yield* annotateInteractionId(interactionId);
+      yield* annotateRequestId(requestId);
+
+      const spans = yield* InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
+      const root = operation(spans, "correlated-root");
+      const child = operation(spans, "correlated-child");
+      expect(root.interactionId).toBe(interactionId);
+      expect(root.requestId).toBe(requestId);
+      expect(root.attributes["test.requestId"]).toBe("application-value");
+      expect(child.interactionId).toBe(interactionId);
+      expect(child.requestId).toBeUndefined();
+      expect(operation(spans, "invalid-correlation").interactionId).toBeUndefined();
+      expect(JSON.stringify(spans)).not.toContain("wide.interaction.id");
+      expect(JSON.stringify(spans)).not.toContain("wide.request.id");
     }).pipe(Effect.provide(makeTestLayer())),
   );
 

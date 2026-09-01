@@ -6,6 +6,7 @@ import {
 } from "@wide-effect/core";
 import { Context, Effect, Layer, Schema } from "effect";
 import { failureAttributeKeys } from "./failure.js";
+import { correlationAttributeKeys } from "./correlation.js";
 
 export interface ObservabilityConfigService {
   readonly service: ServiceMetadata;
@@ -76,7 +77,10 @@ const defaultHttpOutcomePolicy: HttpOutcomePolicyType = {
 
 function withSanitizedPath(policy: AttributePolicy, enabled: boolean): AttributePolicy {
   const deniedKeys = new Set(policy.deniedKeys);
-  const reservedKeys = Object.values(failureAttributeKeys);
+  const reservedKeys = [
+    ...Object.values(failureAttributeKeys),
+    ...Object.values(correlationAttributeKeys),
+  ];
   for (const key of reservedKeys) deniedKeys.delete(key);
   if (enabled) deniedKeys.delete("url.path");
   return {

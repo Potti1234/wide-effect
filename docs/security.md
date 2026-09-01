@@ -30,6 +30,12 @@ stacks, defects, getters, or pretty causes. Applications can add a pre-sanitized
 retryability flag, and single-line summary with `annotateFailure`. Invalid enrichment is ignored and
 cannot change the business exit.
 
+Top-level `interactionId` and `requestId` are promoted only from reserved annotations after branded
+Schema validation, and the duplicate annotations are removed. Interaction IDs may cross an explicit
+allowed HTTP origin but remain untrusted metadata. Request IDs are generated independently for each
+server hop; inbound request-ID headers are discarded. Neither identifier participates in identity,
+tenancy, or authorization.
+
 Foldkit capture never reads or exports the Model. It records approved Message/Command metadata in a
 count-, byte-, and age-bounded timeline. Diagnostic upload endpoints remain consumer-owned and must
 authenticate the caller, authorize trace access, enforce retention, decode the bundle, and apply a

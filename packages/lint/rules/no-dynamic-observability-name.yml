@@ -3,7 +3,7 @@
 id: wide-effect-no-dynamic-observability-name
 language: tsx
 severity: error
-message: "Use a static observability event or log message; move changing values into structured attributes"
+message: "Use a static observability event or operation name; move changing values into attributes"
 
 rule:
   any:
@@ -12,95 +12,23 @@ rule:
         - has: { kind: template_substitution, stopBy: end }
     - pattern: event($LEFT + $RIGHT, $$$REST)
     - all:
-        [{ pattern: "Effect.log($MESSAGE)" }, { has: { kind: template_substitution, stopBy: end } }]
+        - pattern: withWideSpan($NAME)
+        - has: { kind: template_substitution, stopBy: end }
+    - pattern: withWideSpan($LEFT + $RIGHT)
     - all:
-        [
-          { pattern: "Effect.logDebug($MESSAGE)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
+        - pattern: withWideSpan($NAME, $OPTIONS)
+        - has: { kind: template_substitution, stopBy: end }
+    - pattern: withWideSpan($LEFT + $RIGHT, $OPTIONS)
     - all:
-        [
-          { pattern: "Effect.logInfo($MESSAGE)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
+        - pattern: Effect.withSpan($EFFECT, $NAME)
+        - has: { kind: template_substitution, stopBy: end }
+    - pattern: Effect.withSpan($EFFECT, $LEFT + $RIGHT)
     - all:
-        [
-          { pattern: "Effect.logWarning($MESSAGE)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
-    - all:
-        [
-          { pattern: "Effect.logError($MESSAGE)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
-    - all:
-        [
-          { pattern: "Effect.logFatal($MESSAGE)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
-    - all:
-        [
-          { pattern: "Effect.logTrace($MESSAGE)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
-    - pattern: Effect.log($LEFT + $RIGHT)
-    - pattern: Effect.logDebug($LEFT + $RIGHT)
-    - pattern: Effect.logInfo($LEFT + $RIGHT)
-    - pattern: Effect.logWarning($LEFT + $RIGHT)
-    - pattern: Effect.logError($LEFT + $RIGHT)
-    - pattern: Effect.logFatal($LEFT + $RIGHT)
-    - pattern: Effect.logTrace($LEFT + $RIGHT)
-    - all:
-        [
-          { pattern: "$LOGGER.debug($MESSAGE, $$$REST)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
-    - all:
-        [
-          { pattern: "$LOGGER.info($MESSAGE, $$$REST)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
-    - all:
-        [
-          { pattern: "$LOGGER.warn($MESSAGE, $$$REST)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
-    - all:
-        [
-          { pattern: "$LOGGER.warning($MESSAGE, $$$REST)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
-    - all:
-        [
-          { pattern: "$LOGGER.error($MESSAGE, $$$REST)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
-    - all:
-        [
-          { pattern: "$LOGGER.fatal($MESSAGE, $$$REST)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
-    - all:
-        [
-          { pattern: "$LOGGER.trace($MESSAGE, $$$REST)" },
-          { has: { kind: template_substitution, stopBy: end } },
-        ]
-    - pattern: $LOGGER.debug($LEFT + $RIGHT, $$$REST)
-    - pattern: $LOGGER.info($LEFT + $RIGHT, $$$REST)
-    - pattern: $LOGGER.warn($LEFT + $RIGHT, $$$REST)
-    - pattern: $LOGGER.warning($LEFT + $RIGHT, $$$REST)
-    - pattern: $LOGGER.error($LEFT + $RIGHT, $$$REST)
-    - pattern: $LOGGER.fatal($LEFT + $RIGHT, $$$REST)
-    - pattern: $LOGGER.trace($LEFT + $RIGHT, $$$REST)
-    - pattern: $LOGGER.debug($LEFT + $RIGHT)
-    - pattern: $LOGGER.info($LEFT + $RIGHT)
-    - pattern: $LOGGER.warn($LEFT + $RIGHT)
-    - pattern: $LOGGER.warning($LEFT + $RIGHT)
-    - pattern: $LOGGER.error($LEFT + $RIGHT)
-    - pattern: $LOGGER.fatal($LEFT + $RIGHT)
-    - pattern: $LOGGER.trace($LEFT + $RIGHT)
+        - pattern: Effect.withSpan($EFFECT, $NAME, $OPTIONS)
+        - has: { kind: template_substitution, stopBy: end }
+    - pattern: Effect.withSpan($EFFECT, $LEFT + $RIGHT, $OPTIONS)
 
 note: |
   Prefer `event("worker.claimed", { runId })` or
-  `Effect.logInfo("Worker claimed run").pipe(Effect.annotateLogs({ runId }))`.
-  Static names make events groupable; dynamic values belong in redacted attributes.
+  `effect.pipe(withWideSpan("worker.run.claim"))`. Static names make events
+  groupable; dynamic values belong in redacted attributes.

@@ -6,9 +6,15 @@ valid:
   - "const credentials = { token: accessToken }"
   # Edge: suffixes are not guessed because that would flag safe names such as tokenCount.
   - 'event("usage", { tokenCount })'
+  - 'const fields = { authorization }; event("auth.checked", { ...fields })'
+  - 'event?.("auth.checked", { authorization })'
+  - "observe({ [key]: value })"
+  - "const enrich = annotate; enrich({ token })"
 invalid:
   - 'event("auth.failed", { authorization: header })'
   - "annotate({ api_key: apiKey })"
   - "Effect.annotateLogs({ cookie })"
   - "Effect.annotateCurrentSpan({ prompt: rawPrompt })"
   - 'event("tool.finished", { tool_output: output })'
+  - 'annotateFailure({ category: "dependency", credentials })'
+  - 'withWideSpan("auth.login", { attributes: { password } })(effect)'

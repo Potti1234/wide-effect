@@ -33,6 +33,19 @@ changing status out of the event name:
 event("run.finished", { ...fields, status });
 ```
 
+### `wide-effect-safe-effect-log-call`
+
+Requires the canonical `Effect.log*` APIs to receive exactly one lowercase semantic string literal.
+Attach structured context with `Effect.annotateLogs`:
+
+```ts
+Effect.logInfo("worker.run.claimed").pipe(Effect.annotateLogs({ "fractal.run.id": runId }));
+```
+
+The rule deliberately does not guess aliases, optional chains, unrelated logger packages, scripts,
+or wrappers. A consumer that standardizes another import name can copy the rule with that explicit
+name instead of broadly matching every `logInfo` function.
+
 ### `wide-effect-no-sensitive-observability-key`
 
 Rejects exact, well-known secret/content keys inside `event`, `annotate`, `Effect.annotateLogs`, and

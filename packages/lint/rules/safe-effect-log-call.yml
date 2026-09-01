@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ast-grep/ast-grep/main/schemas/typescript_rule.json
+
+id: wide-effect-safe-effect-log-call
+language: tsx
+severity: error
+message: "Use one static semantic Effect log message and attach fields with Effect.annotateLogs"
+
+rule:
+  any:
+    - pattern: Effect.log($MESSAGE, $$$REST)
+    - pattern: Effect.logDebug($MESSAGE, $$$REST)
+    - pattern: Effect.logInfo($MESSAGE, $$$REST)
+    - pattern: Effect.logWarning($MESSAGE, $$$REST)
+    - pattern: Effect.logError($MESSAGE, $$$REST)
+    - pattern: Effect.logFatal($MESSAGE, $$$REST)
+    - pattern: Effect.logTrace($MESSAGE, $$$REST)
+    - all:
+        - any:
+            - pattern: Effect.log($MESSAGE)
+            - pattern: Effect.logDebug($MESSAGE)
+            - pattern: Effect.logInfo($MESSAGE)
+            - pattern: Effect.logWarning($MESSAGE)
+            - pattern: Effect.logError($MESSAGE)
+            - pattern: Effect.logFatal($MESSAGE)
+            - pattern: Effect.logTrace($MESSAGE)
+        - not:
+            has:
+              kind: string
+              regex: '^[''"][a-z][a-z0-9]*(?:[._-][a-z0-9]+)+[''"]$'
+              stopBy: end
+
+note: |
+  Replace `Effect.logInfo("run.claimed", { runId })` with
+  `Effect.logInfo("run.claimed").pipe(Effect.annotateLogs({ runId }))`.
+  The package rule intentionally recognizes the canonical `Effect` import name only.

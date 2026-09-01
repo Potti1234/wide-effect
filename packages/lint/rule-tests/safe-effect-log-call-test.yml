@@ -1,0 +1,15 @@
+id: wide-effect-safe-effect-log-call
+valid:
+  - 'Effect.logInfo("worker.run.claimed")'
+  - 'Effect.logError("http.request.failed").pipe(Effect.annotateLogs({ "fractal.run.id": runId }))'
+  - 'logger.info("unrelated logger", { runId })'
+  - 'logInfo("configured alias is outside the canonical package rule")'
+  - 'Effect?.logInfo("optional.chain.is.not.guessed")'
+  - "const fixture = { message: `dynamic ${value}` }"
+invalid:
+  - 'Effect.logInfo("worker.run.claimed", { runId })'
+  - 'Effect.logError("http.request.failed", error, { runId })'
+  - "Effect.logInfo(message)"
+  - "Effect.logInfo(`worker.run.${outcome}`)"
+  - 'Effect.logInfo("Worker claimed run")'
+  - 'Effect.logInfo("claimed")'

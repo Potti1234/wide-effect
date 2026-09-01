@@ -20,6 +20,8 @@ rule:
         any:
           - pattern: event($$$ARGS)
           - pattern: annotate($$$ARGS)
+          - pattern: annotateFailure($$$ARGS)
+          - pattern: withWideSpan($$$ARGS)
           - pattern: Effect.annotateLogs($$$ARGS)
           - pattern: Effect.annotateCurrentSpan($$$ARGS)
           - pattern: Effect.withLogSpan($$$ARGS)

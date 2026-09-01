@@ -21,6 +21,20 @@
         "vitest": "^4.1.7",
       },
     },
+    "examples/clickhouse-local": {
+      "name": "@wide-effect/example-clickhouse-local",
+      "dependencies": {
+        "@wide-effect/core": "workspace:*",
+        "@wide-effect/effect": "workspace:*",
+        "effect": "4.0.0-rc.108",
+      },
+      "devDependencies": {
+        "@effect/vitest": "4.0.0-rc.108",
+        "@types/bun": "^1.3.0",
+        "typescript": "^5.9.3",
+        "vitest": "^4.1.7",
+      },
+    },
     "examples/correlated-fullstack": {
       "name": "@wide-effect/example-correlated-fullstack",
       "dependencies": {
@@ -37,16 +51,16 @@
     },
     "packages/core": {
       "name": "@wide-effect/core",
-      "version": "0.0.1-alpha.3",
+      "version": "0.0.1-alpha.5",
       "peerDependencies": {
         "effect": ">=4.0.0-beta.102 <5.0.0",
       },
     },
     "packages/effect": {
       "name": "@wide-effect/effect",
-      "version": "0.0.1-alpha.3",
+      "version": "0.0.1-alpha.5",
       "dependencies": {
-        "@wide-effect/core": "0.0.1-alpha.3",
+        "@wide-effect/core": "0.0.1-alpha.5",
       },
       "peerDependencies": {
         "effect": ">=4.0.0-beta.102 <5.0.0",
@@ -54,7 +68,7 @@
     },
     "packages/foldkit": {
       "name": "@wide-effect/foldkit",
-      "version": "0.0.1-alpha.3",
+      "version": "0.0.1-alpha.5",
       "dependencies": {
         "@wide-effect/core": "0.0.1-alpha.3",
         "@wide-effect/effect": "0.0.1-alpha.3",
@@ -66,14 +80,14 @@
     },
     "packages/lint": {
       "name": "@wide-effect/lint",
-      "version": "0.0.1-alpha.3",
+      "version": "0.0.1-alpha.5",
       "devDependencies": {
         "@ast-grep/cli": "^0.43.0",
       },
     },
     "packages/testing": {
       "name": "@wide-effect/testing",
-      "version": "0.0.1-alpha.3",
+      "version": "0.0.1-alpha.5",
       "peerDependencies": {
         "@wide-effect/core": "0.0.1-alpha.3",
         "effect": ">=4.0.0-beta.102 <5.0.0",
@@ -302,6 +316,8 @@
     "@wide-effect/core": ["@wide-effect/core@workspace:packages/core"],
 
     "@wide-effect/effect": ["@wide-effect/effect@workspace:packages/effect"],
+
+    "@wide-effect/example-clickhouse-local": ["@wide-effect/example-clickhouse-local@workspace:examples/clickhouse-local"],
 
     "@wide-effect/example-correlated-fullstack": ["@wide-effect/example-correlated-fullstack@workspace:examples/correlated-fullstack"],
 

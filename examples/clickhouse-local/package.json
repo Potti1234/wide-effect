@@ -1,0 +1,20 @@
+{
+  "name": "@wide-effect/example-clickhouse-local",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@wide-effect/core": "workspace:*",
+    "@wide-effect/effect": "workspace:*",
+    "effect": "4.0.0-rc.108"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.0-rc.108",
+    "@types/bun": "^1.3.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.7"
+  }
+}

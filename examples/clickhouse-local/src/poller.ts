@@ -86,6 +86,7 @@ export const makeAlertPoller = (
     });
     const cursor = yield* Ref.make<AlertCursor | undefined>(undefined);
     const incidents = yield* Ref.make<ReadonlyMap<string, IncidentRecord>>(new Map());
+    const lastTicketedAt = yield* Ref.make<number | undefined>(undefined);
 
     const claim = (key: string) =>
       Ref.modify(incidents, (records) => {
@@ -109,6 +110,7 @@ export const makeAlertPoller = (
         const result = yield* Effect.exit(triage(row));
         if (result._tag === "Success") {
           yield* update(key, { key, state: "ticketed", attempts });
+          yield* Ref.set(lastTicketedAt, yield* options.now);
           return;
         }
         if (attempts >= options.maxAttempts) {
@@ -134,8 +136,17 @@ export const makeAlertPoller = (
       const rows = (yield* source.read(yield* Ref.get(cursor), options.lookbackMs))
         .filter((row) => matches(rule, row))
         .toSorted(compareRows);
-      const unique = new Map(rows.map((row) => [incidentKey(rule.id, row), row]));
+      const latestTime = Date.parse(rows.at(-1)?.ingested_at ?? "");
+      const windowStart = latestTime - rule.windowSeconds * 1_000;
+      const windowed = Number.isFinite(latestTime)
+        ? rows.filter((row) => Date.parse(row.ingested_at) >= windowStart)
+        : [];
+      const unique = new Map(windowed.map((row) => [incidentKey(rule.id, row), row]));
+      const thresholdMet = unique.size >= rule.minimumOccurrences;
       for (const [key, row] of unique) {
+        if (!thresholdMet) break;
+        const lastTicket = yield* Ref.get(lastTicketedAt);
+        if (lastTicket !== undefined && now - lastTicket < rule.cooldownSeconds * 1_000) break;
         const claimed = yield* claim(key);
         if (claimed) yield* dispatch(key, row, 0);
       }

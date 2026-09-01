@@ -13,7 +13,7 @@ acceptance criteria pass. Discoveries made in Fractal must be reflected back int
 than patched only in the application.
 
 The production-hardening workstreams are implemented through the consumer-owned ClickHouse/triage
-proof. Current evidence is 113 package tests, six deterministic ClickHouse-example tests, packed
+proof. Current evidence is 113 package tests, seven deterministic ClickHouse-example tests, packed
 rc.108 and beta.102 consumer checks, the correlated full-stack example, and the opt-in Docker proof
 documented in `examples/clickhouse-local/RUNBOOK.md`. Fractal migration and LowkeySec validation remain
 separate repository work and are not implied complete here.

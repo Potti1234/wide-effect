@@ -64,6 +64,41 @@ describe("cursor alert poller", () => {
       expect((yield* poller.incidents)[0]?.state).toBe("ticketed");
     });
   });
+
+  it.effect("enforces occurrence windows and cooldown for new incidents", () => {
+    const first = fixtureRow();
+    const second = {
+      ...fixtureRow(),
+      span_id: "3".repeat(16),
+      ingested_at: "2026-09-01T00:00:02.000Z",
+    };
+    let rows: ReadonlyArray<ClickHouseSpanRow> = [first];
+    let tickets = 0;
+    return Effect.gen(function* () {
+      const poller = yield* makeAlertPoller(
+        { ...rule, minimumOccurrences: 2, cooldownSeconds: 1 },
+        { read: () => Effect.succeed(rows) },
+        () => Effect.sync(() => tickets++),
+        pollerOptions(),
+      );
+      yield* poller.pollOnce;
+      expect(tickets).toBe(0);
+      rows = [first, second];
+      yield* poller.pollOnce;
+      expect(tickets).toBe(1);
+      const third = {
+        ...second,
+        span_id: "4".repeat(16),
+        ingested_at: "2026-09-01T00:00:03.000Z",
+      };
+      rows = [second, third];
+      yield* poller.pollOnce;
+      expect(tickets).toBe(1);
+      yield* TestClock.adjust("1 second");
+      yield* poller.pollOnce;
+      expect(tickets).toBe(2);
+    });
+  });
 });
 
 function pollerOptions() {

@@ -16,7 +16,10 @@ The alert proof decodes bounded rules containing values, never SQL fragments. It
 `(rule_id, trace_id, span_id)` incident key. Duplicate rows, repeated polls, and concurrent pollers
 therefore dispatch once. Its in-memory state fixture models `claimed`, `triaging`, `retry_wait`,
 `ticketed`, and `needs_human`; a real consumer must put those claims and leases in its durable workflow
-database. ClickHouse is evidence storage, not a mutable job queue.
+database. Minimum occurrences are evaluated inside the decoded rule window, and a successful ticket
+starts the configured cooldown for new incidents. ClickHouse is evidence storage, not a mutable job
+queue. Rows older than the configured source lookback are intentionally undiscoverable and follow the
+consumer's retention/reconciliation policy.
 
 The triage stage fetches same-trace envelopes within explicit time, count, and byte limits and decodes
 each envelope again before building the shared `DiagnosticBundle`. Timeline ordering is deterministic.

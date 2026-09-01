@@ -19,6 +19,9 @@ export const ServiceMetadata = Schema.Struct({
   version: Text,
   environment: Text,
   deploymentId: Schema.optionalKey(Text),
+  commitHash: Schema.optionalKey(Text),
+  region: Schema.optionalKey(Text),
+  instanceId: Schema.optionalKey(Text),
 });
 export type ServiceMetadata = typeof ServiceMetadata.Type;
 export const SpanKind = Schema.Literals(["internal", "server", "client", "producer", "consumer"]);

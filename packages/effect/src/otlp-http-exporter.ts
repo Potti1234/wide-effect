@@ -233,7 +233,12 @@ function resourceAttributes(service: ServiceMetadata): ReadonlyArray<OtlpKeyValu
     "service.name": service.name,
     "service.version": service.version,
     "deployment.environment.name": service.environment,
-    ...(service.deploymentId === undefined ? {} : { "service.instance.id": service.deploymentId }),
+    ...(service.deploymentId === undefined
+      ? {}
+      : { "wide_effect.deployment.id": service.deploymentId }),
+    ...(service.commitHash === undefined ? {} : { "vcs.ref.head.revision": service.commitHash }),
+    ...(service.region === undefined ? {} : { "cloud.region": service.region }),
+    ...(service.instanceId === undefined ? {} : { "service.instance.id": service.instanceId }),
   });
 }
 

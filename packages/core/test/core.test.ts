@@ -74,6 +74,36 @@ describe("boundary contracts", () => {
       onExcessProperty: "error",
     })(fixture);
     expect(Schema.encodeSync(FlowSpan)(decoded)).toEqual(fixture);
+    const deployed = Schema.decodeUnknownSync(FlowSpan, { onExcessProperty: "error" })({
+      ...fixture,
+      service: {
+        ...fixture.service,
+        deploymentId: "deploy-7",
+        commitHash: "0123456789abcdef",
+        region: "eu-central-1",
+        instanceId: "api-7",
+      },
+    });
+    expect(deployed.service).toMatchObject({
+      deploymentId: "deploy-7",
+      commitHash: "0123456789abcdef",
+      region: "eu-central-1",
+      instanceId: "api-7",
+    });
+    for (const field of ["commitHash", "region", "instanceId"] as const) {
+      expect(() =>
+        Schema.decodeUnknownSync(FlowSpan)({
+          ...fixture,
+          service: { ...fixture.service, [field]: "" },
+        }),
+      ).toThrow();
+      expect(() =>
+        Schema.decodeUnknownSync(FlowSpan)({
+          ...fixture,
+          service: { ...fixture.service, [field]: "x".repeat(257) },
+        }),
+      ).toThrow();
+    }
     const enriched = Schema.decodeUnknownSync(FlowSpan, { onExcessProperty: "error" })({
       ...fixture,
       outcome: "failure",

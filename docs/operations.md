@@ -14,6 +14,9 @@ versioned `FlowSpan` envelope only after decoding it, index consumer-owned looku
 retention locally. The NDJSON exporter is append-only but does not promise `fsync`; the OTLP adapter is
 server-only and sends canonical spans mapped to OTLP JSON.
 
+Record deployment, commit, region, and instance metadata once in the runtime service configuration.
+Use those resource fields for rollout correlation, never as unbounded metric labels.
+
 Before release, run `bun run check`. This builds, tests, packs every package, installs the tarballs in
 an isolated consumer, imports all public entry points, checks the browser graph, and verifies a single
 Effect installation. `bun run release:publish` performs that gate before Changesets publishing, but

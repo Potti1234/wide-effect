@@ -35,3 +35,8 @@ The main Effect entry point is browser-safe. Import NDJSON and OTLP/HTTP exporte
 Application configuration must supply service identity, environment, deployment/version, sampling,
 delivery bounds, exporter destinations, and an attribute allowlist. Secrets and credentials belong in
 consumer-owned configuration services and must never be attached as telemetry attributes.
+
+Service metadata may additionally include bounded `commitHash`, `region`, and `instanceId` values.
+Supply them through decoded runtime configuration, not per-request annotations. The OTLP adapter maps
+these to resource attributes; instance identity remains span/resource evidence and must not become a
+metric label.

@@ -2,6 +2,7 @@ import {
   InteractionId,
   RequestId,
   parseSpanId,
+  parseSegmentId,
   parseTraceId,
   type FlowSpan,
 } from "@wide-effect/core";
@@ -18,6 +19,7 @@ const span: FlowSpan = {
   schemaVersion: 1,
   traceId: parseTraceId("0123456789abcdef0123456789abcdef"),
   spanId: parseSpanId("0123456789abcdef"),
+  segmentId: parseSegmentId("0123456789abcdef"),
   parentSpanId: parseSpanId("1111111111111111"),
   interactionId: Schema.decodeUnknownSync(InteractionId)("interaction-1"),
   requestId: Schema.decodeUnknownSync(RequestId)("request-1"),
@@ -125,6 +127,9 @@ describe("OTLP/HTTP JSON exporter", () => {
                         },
                       }),
                       keyValue("wide_effect.schema.version", { doubleValue: 1 }),
+                      keyValue("wide_effect.segment.id", {
+                        stringValue: "0123456789abcdef",
+                      }),
                       keyValue("wide_effect.outcome", { stringValue: "failure" }),
                       keyValue("wide_effect.duration_ms", { doubleValue: 125 }),
                       keyValue("wide_effect.interaction.id", { stringValue: "interaction-1" }),

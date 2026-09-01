@@ -14,6 +14,9 @@ export const parseTraceId = Schema.decodeUnknownSync(TraceId);
 export const SpanId = hexId(16, "SpanId");
 export type SpanId = typeof SpanId.Type;
 export const parseSpanId = Schema.decodeUnknownSync(SpanId);
+export const SegmentId = hexId(16, "SegmentId");
+export type SegmentId = typeof SegmentId.Type;
+export const parseSegmentId = Schema.decodeUnknownSync(SegmentId);
 
 const boundedId = <const Name extends string>(name: Name) =>
   Schema.String.check(

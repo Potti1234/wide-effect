@@ -62,6 +62,9 @@ describe("wide Effect tracer", () => {
       const root = operation(spans, "root");
       expect(operation(spans, "child.a").parentSpanId).toBe(root.spanId);
       expect(operation(spans, "child.b").parentSpanId).toBe(root.spanId);
+      expect(root.segmentId).toBe(root.spanId);
+      expect(operation(spans, "child.a").segmentId).toBe(root.segmentId);
+      expect(operation(spans, "child.b").segmentId).toBe(root.segmentId);
       expect(new Set(spans.map((span) => span.traceId)).size).toBe(1);
     }).pipe(Effect.provide(makeTestLayer())),
   );
@@ -160,6 +163,7 @@ describe("wide Effect tracer", () => {
       const child = operation(spans, "unsampled-child");
       expect(child.traceId).toBe(parent.traceId);
       expect(child.parentSpanId).toBe(parent.spanId);
+      expect(child.segmentId).toBe(child.spanId);
       expect(child.attributes["effect.sampled"]).toBe(false);
       expect(child.attributes["effect.links"]).toEqual([
         {

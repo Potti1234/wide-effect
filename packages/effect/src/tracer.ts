@@ -1,12 +1,14 @@
 import {
   normalizeAttributes,
   normalizeValue,
+  SegmentId,
   SpanId,
   TraceId,
   type FlowSpan,
   type FailureSummary,
   type LogLevel as CanonicalLogLevel,
   type SafeAttributes,
+  type SegmentId as SegmentIdType,
   type SpanId as SpanIdType,
   type SpanEvent,
   type SpanOutcome,
@@ -37,6 +39,7 @@ class WideSpan implements Tracer.Span {
   readonly name: string;
   readonly spanId: SpanIdType;
   readonly traceId: TraceIdType;
+  readonly segmentId: SegmentIdType;
   readonly parent: Option.Option<Tracer.AnySpan>;
   readonly annotations: Context.Context<never>;
   readonly sampled: boolean;
@@ -64,6 +67,10 @@ class WideSpan implements Tracer.Span {
       onNone: ids.nextTraceId,
       onSome: (parent) => Schema.decodeUnknownSync(TraceId)(parent.traceId),
     });
+    this.segmentId =
+      Option.isSome(this.parent) && this.parent.value instanceof WideSpan
+        ? this.parent.value.segmentId
+        : Schema.decodeUnknownSync(SegmentId)(this.spanId);
     this.status = { _tag: "Started", startTime: options.startTime };
   }
 
@@ -141,6 +148,7 @@ class WideSpan implements Tracer.Span {
       schemaVersion: 1,
       traceId: this.traceId,
       spanId: this.spanId,
+      segmentId: this.segmentId,
       ...(parent === undefined
         ? {}
         : { parentSpanId: Schema.decodeUnknownSync(SpanId)(parent.spanId) }),
@@ -214,6 +222,7 @@ const decodeSpanId = Schema.decodeUnknownOption(SpanId);
 
 function snapshotParent(parent: Option.Option<Tracer.AnySpan>): Option.Option<Tracer.AnySpan> {
   if (Option.isNone(parent)) return Option.none();
+  if (parent.value instanceof WideSpan) return parent;
   try {
     const traceId = decodeTraceId(parent.value.traceId);
     const spanId = decodeSpanId(parent.value.spanId);

@@ -178,6 +178,7 @@ function mapSpan(span: FlowSpan): OtlpSpan {
   const canonicalAttributes: SafeAttributes = {
     ...span.attributes,
     "wide_effect.schema.version": span.schemaVersion,
+    ...(span.segmentId === undefined ? {} : { "wide_effect.segment.id": span.segmentId }),
     "wide_effect.outcome": span.outcome,
     "wide_effect.duration_ms": span.durationMs,
     ...(span.interactionId === undefined

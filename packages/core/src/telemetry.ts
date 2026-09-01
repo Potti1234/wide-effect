@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { InteractionId, RequestId, SpanId, TraceId } from "./identifiers.js";
+import { InteractionId, RequestId, SegmentId, SpanId, TraceId } from "./identifiers.js";
 import { SafeAttributes } from "./safe-value.js";
 
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
@@ -59,6 +59,7 @@ const FlowSpanFields = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   traceId: TraceId,
   spanId: SpanId,
+  segmentId: Schema.optionalKey(SegmentId),
   parentSpanId: Schema.optionalKey(SpanId),
   interactionId: Schema.optionalKey(InteractionId),
   requestId: Schema.optionalKey(RequestId),

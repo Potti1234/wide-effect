@@ -1,4 +1,9 @@
-import { ServiceMetadata, type AttributePolicy } from "@wide-effect/core";
+import {
+  HttpOutcomePolicy,
+  ServiceMetadata,
+  type AttributePolicy,
+  type HttpOutcomePolicy as HttpOutcomePolicyType,
+} from "@wide-effect/core";
 import { Context, Effect, Layer, Schema } from "effect";
 import { failureAttributeKeys } from "./failure.js";
 
@@ -6,6 +11,7 @@ export interface ObservabilityConfigService {
   readonly service: ServiceMetadata;
   readonly attributePolicy: AttributePolicy;
   readonly sanitizeHttpPath?: ((path: string) => string) | undefined;
+  readonly httpOutcomePolicy: HttpOutcomePolicyType;
 }
 
 export class ObservabilityConfig extends Context.Service<
@@ -18,15 +24,22 @@ export interface ObservabilityOptions {
   readonly attributePolicy?: AttributePolicy;
   /** Programmatic opt-in for recording a sanitized `url.path`; never decoded from external data. */
   readonly sanitizeHttpPath?: ((path: string) => string) | undefined;
+  readonly httpOutcomePolicy?: HttpOutcomePolicyType | undefined;
 }
 
 export const configLayer = (options: ObservabilityOptions) =>
   Layer.effect(
     ObservabilityConfig,
-    Schema.decodeUnknownEffect(ServiceMetadata)(options.service).pipe(
-      Effect.map((service) =>
+    Effect.all({
+      service: Schema.decodeUnknownEffect(ServiceMetadata)(options.service),
+      httpOutcomePolicy: Schema.decodeUnknownEffect(HttpOutcomePolicy)(
+        options.httpOutcomePolicy ?? defaultHttpOutcomePolicy,
+      ),
+    }).pipe(
+      Effect.map(({ service, httpOutcomePolicy }) =>
         ObservabilityConfig.of({
           service,
+          httpOutcomePolicy,
           attributePolicy: withSanitizedPath(
             options.attributePolicy ?? defaultAttributePolicy,
             options.sanitizeHttpPath !== undefined,
@@ -54,6 +67,11 @@ const defaultAttributePolicy: AttributePolicy = {
     "http.request.headers",
     "http.response.headers",
   ]),
+};
+
+const defaultHttpOutcomePolicy: HttpOutcomePolicyType = {
+  serverErrorRanges: [{ minimum: 500, maximum: 599 }],
+  clientErrorRanges: [{ minimum: 500, maximum: 599 }],
 };
 
 function withSanitizedPath(policy: AttributePolicy, enabled: boolean): AttributePolicy {

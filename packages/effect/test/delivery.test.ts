@@ -89,6 +89,7 @@ describe("bounded delivery", () => {
       slowThresholdMs: 50,
       retainOutcomes: ["failure"],
       importantOperations: ["important"],
+      retainHttpStatuses: [400],
     };
     return Effect.gen(function* () {
       const sink = yield* CompletedSpanSink;
@@ -97,14 +98,19 @@ describe("bounded delivery", () => {
       sink.unsafeOffer(span(2, "slow", { durationMs: 50 }));
       sink.unsafeOffer(span(3, "important"));
       sink.unsafeOffer(span(4, "routine"));
+      sink.unsafeOffer({
+        ...span(5, "returned-400"),
+        attributes: { "http.response.status_code": 400 },
+      });
       yield* delivery.flush;
       expect(output.batches.flat().map((item) => item.operation)).toEqual([
         "failure",
         "slow",
         "important",
+        "returned-400",
       ]);
       const health = yield* delivery.health;
-      expect(health.sampled).toBe(3);
+      expect(health.sampled).toBe(4);
       expect(health.dropped).toBe(1);
     }).pipe(Effect.provide(deliveryLayer(options([output.exporter], { sampling }))));
   });

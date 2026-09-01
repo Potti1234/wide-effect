@@ -5,6 +5,12 @@ outcome and duration are known. Configured failures, slow operations, and import
 actors are retained; routine successful traces use a deterministic decision so tests and incident
 comparisons are repeatable.
 
+HTTP status is independent evidence. Successful server and client Effects are classified as failed
+for 5xx responses by default; 4xx responses remain successful unless `httpOutcomePolicy` explicitly
+includes them. Sampling can retain bounded exact `retainHttpStatuses` or merged
+`retainHttpStatusRanges` independently, so a returned 400 can be kept with reason `http-status` even
+when `successRatio` is zero. Only normalized integer statuses from 100 through 599 participate.
+
 `deliveryLayer` uses a bounded queue and non-blocking offers. Choose `drop-newest` when preserving the
 oldest accepted evidence matters, or `drop-oldest` when recent evidence is more useful. Configure a
 finite batch size/age, retry count and backoff, attempt timeout, concurrency, and final flush timeout.

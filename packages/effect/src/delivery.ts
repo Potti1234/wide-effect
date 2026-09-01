@@ -1,4 +1,9 @@
-import { decideSampling, type FlowSpan, type SamplingConfig } from "@wide-effect/core";
+import {
+  SamplingConfig,
+  decideSampling,
+  normalizeSamplingConfig,
+  type FlowSpan,
+} from "@wide-effect/core";
 import {
   Clock,
   Context,
@@ -10,6 +15,7 @@ import {
   Layer,
   Option,
   Queue,
+  Schema,
 } from "effect";
 import type { SpanBatch, SpanExporter } from "./exporter.js";
 import { CompletedSpanSink } from "./sink.js";
@@ -90,10 +96,12 @@ export const deliveryLayer = (input: DeliveryOptions) =>
         Effect.suspend(() => {
           const retained: Array<FlowSpan> = [];
           for (const span of incoming) {
+            const httpStatus = readHttpStatus(span);
             const decision = decideSampling(options.sampling, {
               operation: span.operation,
               outcome: span.outcome,
               durationMs: span.durationMs,
+              ...(httpStatus === undefined ? {} : { httpStatus }),
               deterministicValue: normalizeRatio(
                 options.deterministicValue?.(span) ?? deterministicRatio(span.traceId),
               ),
@@ -348,6 +356,13 @@ function deterministicRatio(traceId: string): number {
   return Number.parseInt(traceId.slice(0, 13), 16) / 0xfffffffffffff;
 }
 
+function readHttpStatus(span: FlowSpan): number | undefined {
+  const value = span.attributes["http.response.status_code"];
+  return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599
+    ? value
+    : undefined;
+}
+
 function normalizeRatio(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
@@ -375,7 +390,12 @@ function validateOptions(options: DeliveryOptions): DeliveryOptions {
     options.retry.jitter > 1
   )
     throw new RangeError("jitter must be between zero and one");
-  return options;
+  return {
+    ...options,
+    sampling: normalizeSamplingConfig(
+      Schema.decodeUnknownSync(SamplingConfig)(options.sampling, { onExcessProperty: "error" }),
+    ),
+  };
 }
 
 interface MutableHealth {

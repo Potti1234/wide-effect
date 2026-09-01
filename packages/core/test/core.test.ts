@@ -6,11 +6,14 @@ import {
   DiagnosticBundle,
   MAX_DIAGNOSTIC_BUNDLE_BYTES,
   MAX_FLOW_SPAN_BYTES,
+  HttpOutcomePolicy,
+  SamplingConfig,
   SafeAttributes,
   SafeValue,
   TraceCarrier,
   decideSampling,
   normalizeAttributes,
+  normalizeSamplingConfig,
   normalizeValue,
   parseSpanId,
   parseTraceId,
@@ -278,7 +281,17 @@ describe("sampling", () => {
       slowThresholdMs: 1_000,
       retainOutcomes: ["failure" as const],
       importantOperations: ["Billing.charge"],
+      retainHttpStatuses: [400],
     };
+    expect(
+      decideSampling(config, {
+        operation: "Read",
+        outcome: "success",
+        durationMs: 1,
+        deterministicValue: 1,
+        httpStatus: 400,
+      }),
+    ).toEqual({ keep: true, reason: "http-status" });
     expect(
       decideSampling(config, {
         operation: "Read",
@@ -306,6 +319,35 @@ describe("sampling", () => {
         },
       ),
     ).toEqual({ keep: true, reason: "sampled" });
+    expect(() =>
+      Schema.decodeUnknownSync(SamplingConfig)({
+        ...config,
+        retainHttpStatuses: [99],
+      }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(HttpOutcomePolicy)({
+        serverErrorRanges: [{ minimum: 500, maximum: 499 }],
+        clientErrorRanges: [],
+      }),
+    ).toThrow();
+    expect(
+      normalizeSamplingConfig({
+        ...config,
+        retainHttpStatuses: [400, 400, 503],
+        retainHttpStatusRanges: [
+          { minimum: 500, maximum: 504 },
+          { minimum: 503, maximum: 510 },
+          { minimum: 400, maximum: 400 },
+        ],
+      }),
+    ).toMatchObject({
+      retainHttpStatuses: [400, 503],
+      retainHttpStatusRanges: [
+        { minimum: 400, maximum: 400 },
+        { minimum: 500, maximum: 510 },
+      ],
+    });
   });
 });
 

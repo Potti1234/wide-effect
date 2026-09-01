@@ -123,7 +123,9 @@ class WideSpan implements Tracer.Span {
   ): FlowSpan {
     const rawAttributes = Object.fromEntries(this.attributes);
     const explicitFailure = readFailureAnnotation(rawAttributes);
-    const failure = failureSummary(exit, explicitFailure);
+    const httpStatus = readHttpStatus(rawAttributes);
+    const outcome = classifyOutcome(exit, this.kind, httpStatus, this.config.httpOutcomePolicy);
+    const failure = failureSummary(exit, outcome, httpStatus, explicitFailure);
     rawAttributes["effect.sampled"] = this.sampled;
     if (this.links.length > 0) {
       rawAttributes["effect.links"] = this.links.map(({ attributes, span }) => ({
@@ -143,7 +145,7 @@ class WideSpan implements Tracer.Span {
       service: this.config.service,
       operation: safeName(this.name, "unnamed-span"),
       kind: this.kind,
-      outcome: classifyOutcome(exit),
+      outcome,
       ...(failure === undefined ? {} : { failure }),
       startTime: timestamp(startTimeNanos),
       endTime: timestamp(endTimeNanos),
@@ -165,9 +167,14 @@ class WideSpan implements Tracer.Span {
 
 function failureSummary(
   exit: Exit.Exit<unknown, unknown>,
+  outcome: SpanOutcome,
+  httpStatus: number | undefined,
   explicit: Omit<FailureSummary, "type">,
 ): FailureSummary | undefined {
-  if (Exit.isSuccess(exit)) return undefined;
+  if (Exit.isSuccess(exit))
+    return outcome === "failure" && httpStatus !== undefined
+      ? { type: "http", code: `http.${httpStatus}`, ...explicit }
+      : undefined;
   const type = exit.cause.reasons.some(Cause.isDieReason)
     ? "defect"
     : exit.cause.reasons.some(Cause.isInterruptReason)
@@ -272,11 +279,34 @@ function readLogLevel(value: unknown): CanonicalLogLevel | undefined {
     : undefined;
 }
 
-function classifyOutcome(exit: Exit.Exit<unknown, unknown>): SpanOutcome {
-  if (Exit.isSuccess(exit)) return "success";
+function classifyOutcome(
+  exit: Exit.Exit<unknown, unknown>,
+  kind: Tracer.SpanKind,
+  httpStatus: number | undefined,
+  policy: ObservabilityConfig["Service"]["httpOutcomePolicy"],
+): SpanOutcome {
+  if (Exit.isSuccess(exit)) {
+    if (httpStatus === undefined) return "success";
+    const ranges =
+      kind === "server"
+        ? policy.serverErrorRanges
+        : kind === "client"
+          ? policy.clientErrorRanges
+          : [];
+    return ranges.some((range) => httpStatus >= range.minimum && httpStatus <= range.maximum)
+      ? "failure"
+      : "success";
+  }
   if (exit.cause.reasons.some(Cause.isDieReason)) return "defect";
   if (exit.cause.reasons.some(Cause.isInterruptReason)) return "interrupted";
   return "failure";
+}
+
+function readHttpStatus(attributes: Record<string, unknown>): number | undefined {
+  const value = attributes["http.response.status_code"];
+  return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599
+    ? value
+    : undefined;
 }
 
 function timestamp(nanos: bigint): string {

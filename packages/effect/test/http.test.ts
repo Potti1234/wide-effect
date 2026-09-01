@@ -1,4 +1,10 @@
-import { parseSpanId, parseTraceId, parseTraceState, type TraceCarrier } from "@wide-effect/core";
+import {
+  parseSpanId,
+  parseTraceId,
+  parseTraceState,
+  type HttpOutcomePolicy,
+  type TraceCarrier,
+} from "@wide-effect/core";
 import { expect } from "@effect/vitest";
 import { Effect, Fiber, Layer, Option } from "effect";
 import {
@@ -164,6 +170,30 @@ describe("Effect HTTP propagation", () => {
     }).pipe(Effect.provide(testTracingLayer())),
   );
 
+  it.effect("classifies real server response statuses independently from Effect success", () =>
+    Effect.gen(function* () {
+      for (const status of [200, 400, 404, 500]) {
+        const request = HttpServerRequest.fromWeb(
+          new Request(`https://api.example.test/status/${status}`),
+        );
+        yield* w3cServerTracer(Effect.succeed(HttpServerResponse.empty({ status }))).pipe(
+          Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+        );
+      }
+      yield* Effect.yieldNow;
+      const spans = (yield* completedSpans).filter((span) => span.kind === "server");
+      expect(
+        spans.map((span) => [span.attributes["http.response.status_code"], span.outcome]),
+      ).toEqual([
+        [200, "success"],
+        [400, "success"],
+        [404, "success"],
+        [500, "failure"],
+      ]);
+      expect(spans.at(-1)?.failure).toEqual({ type: "http", code: "http.500" });
+    }).pipe(Effect.provide(testTracingLayer())),
+  );
+
   it.effect("uses the built-in single client span and forwards scoped tracestate", () => {
     const requests: Array<HttpClientRequestSnapshot> = [];
     const base = HttpClient.make((request) =>
@@ -242,6 +272,43 @@ describe("Effect HTTP propagation", () => {
     );
   });
 
+  it.effect("classifies real client statuses with the default policy", () => {
+    const makeClient = (status: number) =>
+      HttpClient.make((request) =>
+        Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status }))),
+      );
+    return Effect.gen(function* () {
+      yield* makeClient(400).get("https://worker.example.test/default-400");
+      yield* makeClient(500).get("https://worker.example.test/default-500");
+      const spans = (yield* completedSpans).filter((span) => span.kind === "client");
+      expect(spans.map((span) => span.outcome)).toEqual(["success", "failure"]);
+    }).pipe(Effect.provide(testTracingLayer()));
+  });
+
+  it.effect("allows client 4xx classification as an explicit policy", () => {
+    const client = HttpClient.make((request) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 400 }))),
+    );
+    return Effect.gen(function* () {
+      yield* client.get("https://worker.example.test/custom-400");
+      const spans = (yield* completedSpans).filter((span) => span.kind === "client");
+      expect(spans[0]?.outcome).toBe("failure");
+      expect(spans[0]?.failure).toEqual({ type: "http", code: "http.400" });
+    }).pipe(
+      Effect.provide(
+        testTracingLayer({
+          httpOutcomePolicy: {
+            serverErrorRanges: [{ minimum: 500, maximum: 599 }],
+            clientErrorRanges: [
+              { minimum: 400, maximum: 499 },
+              { minimum: 500, maximum: 599 },
+            ],
+          },
+        }),
+      ),
+    );
+  });
+
   it.effect("closes an interrupted client span exactly once", () => {
     const client = withTraceStatePropagation(HttpClient.make(() => Effect.never));
     return Effect.gen(function* () {
@@ -299,13 +366,17 @@ const carrier: TraceCarrier = {
 const completedSpans = InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
 
 function testTracingLayer(
-  options: { readonly sanitizeHttpPath?: ((path: string) => string) | undefined } = {},
+  options: {
+    readonly sanitizeHttpPath?: ((path: string) => string) | undefined;
+    readonly httpOutcomePolicy?: HttpOutcomePolicy | undefined;
+  } = {},
 ) {
   let next = 1;
   const dependencies = Layer.mergeAll(
     configLayer({
       service: { name: "http-test", version: "1", environment: "test" },
       sanitizeHttpPath: options.sanitizeHttpPath,
+      httpOutcomePolicy: options.httpOutcomePolicy,
     }),
     idGeneratorLayer({
       nextTraceId: () => parseTraceId((next++).toString(16).padStart(32, "0")),

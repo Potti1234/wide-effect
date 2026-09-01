@@ -18,6 +18,11 @@ containers are excluded even if a broad custom prefix admits `url.*` or `http.*`
 path, pass a programmatic `sanitizeHttpPath` callback that maps it to a bounded route-like value; do
 not source callbacks from external configuration.
 
+`httpOutcomePolicy` contains bounded server and client error ranges. Both default to 500–599; adding
+400–499 for clients or servers is an explicit semantic choice. Delivery sampling accepts exact
+statuses and ranges, validates them through Effect Schema, removes duplicate exact statuses, and
+merges overlapping or adjacent ranges.
+
 The main Effect entry point is browser-safe. Import NDJSON and OTLP/HTTP exporters only from
 `@wide-effect/effect/server`. Foldkit applications use `instrumentApplication`,
 `registerDevToolsObserver`, and `makeTimelineBuffer`; see the package README for registration order.

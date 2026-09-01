@@ -130,6 +130,12 @@ describe("safe normalization", () => {
       ),
     ).toEqual({ "fractal.run.id": "run_1", "http.method": "GET" });
     expect(
+      normalizeAttributes(
+        { "url.full": "https://user:secret@example.test/?token=secret", "url.scheme": "https" },
+        { allowedPrefixes: ["url."], deniedKeys: new Set(["url.full"]) },
+      ),
+    ).toEqual({ "url.scheme": "https" });
+    expect(
       normalizeValue("abcdefgh", {
         maxBytes: 4,
         maxDepth: 2,

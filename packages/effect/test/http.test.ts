@@ -83,16 +83,23 @@ describe("Effect HTTP propagation", () => {
   it.effect("delegates one continued server span to HttpMiddleware.tracer", () =>
     Effect.suspend(() => {
       let observedState = "missing";
+      const sentinel = "secret-never-export-http-server";
       return Effect.gen(function* () {
         const request = HttpServerRequest.fromWeb(
-          new Request("https://api.example.test/items", {
-            headers: { traceparent: upstream, tracestate: "vendor=state" },
+          new Request(`https://api.example.test/items/${sentinel}?token=${sentinel}`, {
+            headers: {
+              traceparent: upstream,
+              tracestate: "vendor=state",
+              authorization: `Bearer ${sentinel}`,
+              cookie: `session=${sentinel}`,
+            },
           }),
         );
         yield* w3cServerTracer(
           Effect.gen(function* () {
             const state = yield* CurrentTraceState;
             observedState = Option.getOrElse(state, () => "missing");
+            yield* Effect.annotateCurrentSpan("http.route", "/items/:id");
             return HttpServerResponse.empty();
           }),
         ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request));
@@ -106,6 +113,16 @@ describe("Effect HTTP propagation", () => {
           traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           parentSpanId: "bbbbbbbbbbbbbbbb",
         });
+        expect(spans[0]?.attributes).toMatchObject({
+          "http.request.method": "GET",
+          "http.response.status_code": 204,
+          "http.route": "/items/:id",
+          "url.scheme": "http",
+        });
+        expect(spans[0]?.attributes["url.full"]).toBeUndefined();
+        expect(spans[0]?.attributes["url.path"]).toBeUndefined();
+        expect(spans[0]?.attributes["url.query"]).toBeUndefined();
+        expect(JSON.stringify(spans)).not.toContain(sentinel);
       }).pipe(Effect.provide(testTracingLayer()));
     }),
   );
@@ -176,6 +193,55 @@ describe("Effect HTTP propagation", () => {
     }).pipe(Effect.provide(testTracingLayer()));
   });
 
+  it.effect("excludes unsafe client URL fields under the default policy", () => {
+    const sentinel = "secret-never-export-http-client";
+    const base = HttpClient.make((request) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 204 }))),
+    );
+    return Effect.gen(function* () {
+      yield* base.get(
+        `https://user:${sentinel}@worker.example.test/private/${sentinel}?token=${sentinel}#${sentinel}`,
+      );
+      const spans = yield* completedSpans;
+      const client = spans.find((span) => span.kind === "client");
+      expect(client?.attributes).toMatchObject({
+        "http.request.method": "GET",
+        "http.response.status_code": 204,
+        "server.address": "https://worker.example.test",
+        "url.scheme": "https",
+      });
+      expect(client?.attributes["url.full"]).toBeUndefined();
+      expect(client?.attributes["url.path"]).toBeUndefined();
+      expect(client?.attributes["url.query"]).toBeUndefined();
+      expect(JSON.stringify(spans)).not.toContain(sentinel);
+    }).pipe(Effect.provide(testTracingLayer()));
+  });
+
+  it.effect("records only an explicitly sanitized client path", () => {
+    const sentinel = "secret-never-export-http-path";
+    let sanitizedPaths = 0;
+    const base = HttpClient.make((request) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }))),
+    );
+    return Effect.gen(function* () {
+      yield* base.get(`https://worker.example.test/users/${sentinel}`);
+      const spans = yield* completedSpans;
+      const client = spans.find((span) => span.kind === "client");
+      expect(sanitizedPaths).toBe(1);
+      expect(client?.attributes["url.path"]).toBe("/users/:id");
+      expect(JSON.stringify(spans)).not.toContain(sentinel);
+    }).pipe(
+      Effect.provide(
+        testTracingLayer({
+          sanitizeHttpPath: () => {
+            sanitizedPaths++;
+            return "/users/:id";
+          },
+        }),
+      ),
+    );
+  });
+
   it.effect("closes an interrupted client span exactly once", () => {
     const client = withTraceStatePropagation(HttpClient.make(() => Effect.never));
     return Effect.gen(function* () {
@@ -232,10 +298,15 @@ const carrier: TraceCarrier = {
 
 const completedSpans = InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
 
-function testTracingLayer() {
+function testTracingLayer(
+  options: { readonly sanitizeHttpPath?: ((path: string) => string) | undefined } = {},
+) {
   let next = 1;
   const dependencies = Layer.mergeAll(
-    configLayer({ service: { name: "http-test", version: "1", environment: "test" } }),
+    configLayer({
+      service: { name: "http-test", version: "1", environment: "test" },
+      sanitizeHttpPath: options.sanitizeHttpPath,
+    }),
     idGeneratorLayer({
       nextTraceId: () => parseTraceId((next++).toString(16).padStart(32, "0")),
       nextSpanId: () => parseSpanId((next++).toString(16).padStart(16, "0")),

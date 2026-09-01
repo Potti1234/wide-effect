@@ -44,6 +44,7 @@ export type SafeAttributes = typeof SafeAttributes.Type;
 export interface AttributePolicy {
   readonly allowedKeys?: ReadonlySet<string>;
   readonly allowedPrefixes?: ReadonlyArray<string>;
+  readonly deniedKeys?: ReadonlySet<string>;
 }
 
 export const MAX_ATTRIBUTE_KEY_BYTES = 256;
@@ -96,6 +97,7 @@ export function normalizeAttributes(
     Object.entries(normalized).filter(
       ([key]) =>
         isSafeAttributeKey(key) &&
+        policy.deniedKeys?.has(key) !== true &&
         (policy.allowedKeys?.has(key) === true ||
           policy.allowedPrefixes?.some((prefix) => key.startsWith(prefix)) === true),
     ),

@@ -17,6 +17,13 @@ bounded to 128 characters; unsafe, prose, URL-shaped, multi-argument, or dynamic
 may still render the original application arguments to its own output, which is outside the
 canonical telemetry contract and must be secured by the consuming application.
 
+HTTP tracing admits method, response status, route template, scheme, and bounded server address/port
+by default. It rejects `url.full`, `url.query`, raw `url.path`, header containers, and sensitive
+header keys before they enter a live span. Applications that need a client path must provide the
+programmatic `sanitizeHttpPath` strategy to `configLayer`; this callback must return a stable
+route-like value and cannot be supplied through external decoded configuration. Exact denied keys
+take precedence over both exact and prefix allow rules.
+
 Foldkit capture never reads or exports the Model. It records approved Message/Command metadata in a
 count-, byte-, and age-bounded timeline. Diagnostic upload endpoints remain consumer-owned and must
 authenticate the caller, authorize trace access, enforce retention, decode the bundle, and apply a

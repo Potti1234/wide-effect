@@ -66,8 +66,23 @@ class WideSpan implements Tracer.Span {
 
   attribute(key: string, value: unknown): void {
     if (this.ended) return;
-    const sanitized = normalizeAttributes({ [key]: value }, this.config.attributePolicy);
+    const candidate = this.sanitizeAttributeValue(key, value);
+    const sanitized = normalizeAttributes({ [key]: candidate }, this.config.attributePolicy);
     if (Object.hasOwn(sanitized, key)) this.attributes.set(key, sanitized[key]);
+  }
+
+  private sanitizeAttributeValue(key: string, value: unknown): unknown {
+    if (
+      key !== "url.path" ||
+      this.config.sanitizeHttpPath === undefined ||
+      typeof value !== "string"
+    )
+      return value;
+    try {
+      return this.config.sanitizeHttpPath(value);
+    } catch {
+      return undefined;
+    }
   }
 
   event(name: string, startTime: bigint, attributes: Record<string, unknown> = {}): void {

@@ -13,6 +13,11 @@ owns bounded batching, sampling, retries, exporter isolation, flush, and shutdow
 `event` enrich the current Effect span; operation lifecycles should remain named Effect workflows and
 spans rather than an ambient request object.
 
+`configLayer` uses a deny-first HTTP attribute policy. Raw full URLs, queries, paths, and header
+containers are excluded even if a broad custom prefix admits `url.*` or `http.*`. To record a client
+path, pass a programmatic `sanitizeHttpPath` callback that maps it to a bounded route-like value; do
+not source callbacks from external configuration.
+
 The main Effect entry point is browser-safe. Import NDJSON and OTLP/HTTP exporters only from
 `@wide-effect/effect/server`. Foldkit applications use `instrumentApplication`,
 `registerDevToolsObserver`, and `makeTimelineBuffer`; see the package README for registration order.

@@ -7,7 +7,7 @@ import {
   type SegmentStagingConfig,
 } from "@wide-effect/core";
 import { expect } from "@effect/vitest";
-import { Effect, Fiber } from "effect";
+import { Effect, Fiber, Metric } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, it } from "@effect/vitest";
 import {
@@ -79,9 +79,9 @@ describe("bounded delivery", () => {
       const delivery = yield* Delivery;
       for (let index = 1; index <= 5; index++) sink.unsafeOffer(span(index, `span-${index}`));
       const before = yield* delivery.health;
-      expect(before.accepted).toBe(2);
-      expect(before.overflowed).toBe(3);
-      expect(before.dropped).toBe(3);
+      expect(before.pipeline.completed).toBe(5);
+      expect(before.pipeline.accepted).toBe(2);
+      expect(before.pipeline.overflowDropped).toBe(3);
       yield* delivery.flush;
       expect(output.batches.flat().map((item) => item.operation)).toEqual(["span-1", "span-2"]);
     }).pipe(
@@ -117,8 +117,8 @@ describe("bounded delivery", () => {
         "returned-400",
       ]);
       const health = yield* delivery.health;
-      expect(health.sampled).toBe(4);
-      expect(health.dropped).toBe(1);
+      expect(health.pipeline.retained).toBe(4);
+      expect(health.pipeline.sampledOut).toBe(1);
     }).pipe(Effect.provide(deliveryLayer(options([output.exporter], { sampling }))));
   });
 
@@ -150,7 +150,7 @@ describe("bounded delivery", () => {
         "sibling",
         "root",
       ]);
-      expect((yield* delivery.health).dropped).toBe(2);
+      expect((yield* delivery.health).pipeline.sampledOut).toBe(2);
     }).pipe(Effect.provide(deliveryLayer(options([output.exporter], { sampling }))));
   });
 
@@ -186,7 +186,23 @@ describe("bounded delivery", () => {
         "status-sibling",
         "status-root",
       ]);
-    }).pipe(Effect.provide(deliveryLayer(options([left.exporter, right.exporter], { sampling }))));
+      const health = yield* delivery.health;
+      expect(health.pipeline.retained).toBe(3);
+      expect(health.exporters.left?.spansDelivered).toBe(3);
+      expect(health.exporters.right?.spansDelivered).toBe(3);
+      const metrics = yield* Metric.snapshot;
+      const retainedMetric = metrics.find(
+        (metric) =>
+          metric.id === "wide_effect_delivery_pipeline_spans_total" &&
+          metric.attributes?.state === "retained",
+      );
+      expect(retainedMetric?.type).toBe("Counter");
+      if (retainedMetric?.type === "Counter")
+        expect(retainedMetric.state.count).toBe(health.pipeline.retained);
+    }).pipe(
+      Effect.provide(deliveryLayer(options([left.exporter, right.exporter], { sampling }))),
+      Effect.provideService(Metric.MetricRegistry, new Map()),
+    );
   });
 
   it.effect("caches segment decisions for detached late children", () => {
@@ -207,7 +223,7 @@ describe("bounded delivery", () => {
       yield* delivery.flush;
       expect(output.batches).toHaveLength(2);
       expect(output.batches[1]?.[0]?.attributes["wide.segment.late"]).toBe(true);
-      expect((yield* delivery.health).lateSpans).toBe(1);
+      expect((yield* delivery.health).pipeline.lateSpans).toBe(1);
     }).pipe(Effect.provide(deliveryLayer(options([output.exporter]))));
   });
 
@@ -228,8 +244,8 @@ describe("bounded delivery", () => {
       yield* delivery.flush;
       expect(output.batches.flat().map((item) => item.operation)).toEqual(["first-root"]);
       const health = yield* delivery.health;
-      expect(health.segmentDrops).toBe(1);
-      expect(health.dropped).toBe(1);
+      expect(health.pipeline.segmentDrops).toBe(1);
+      expect(health.pipeline.overflowDropped).toBe(1);
     }).pipe(
       Effect.provide(
         deliveryLayer(
@@ -262,7 +278,7 @@ describe("bounded delivery", () => {
       expect(output.batches[0]?.map((item) => item.operation)).toEqual(["failed", "bounded-root"]);
       const root = output.batches[0]?.find((item) => item.operation === "bounded-root");
       expect(root?.attributes["wide.segment.dropped_spans"]).toBe(1);
-      expect((yield* delivery.health).dropped).toBe(1);
+      expect((yield* delivery.health).pipeline.overflowDropped).toBe(1);
     }).pipe(
       Effect.provide(
         deliveryLayer(
@@ -316,7 +332,7 @@ describe("bounded delivery", () => {
       });
       yield* delivery.flush;
       expect(output.batches).toHaveLength(0);
-      expect((yield* delivery.health).dropped).toBe(1);
+      expect((yield* delivery.health).pipeline.sampledOut).toBe(1);
     }).pipe(
       Effect.provide(
         deliveryLayer(options([output.exporter], { sampling, deterministicValue: () => 1 })),
@@ -349,12 +365,55 @@ describe("bounded delivery", () => {
       yield* TestClock.adjust("10 millis");
       yield* Fiber.join(flushing);
       expect(attempts).toBe(3);
-      expect((yield* delivery.health).retried).toBe(2);
+      const exporterHealth = (yield* delivery.health).exporters.retry;
+      expect(exporterHealth?.batchesAttempted).toBe(3);
+      expect(exporterHealth?.spansAttempted).toBe(3);
+      expect(exporterHealth?.retryAttempts).toBe(2);
+      expect(exporterHealth?.batchesDelivered).toBe(1);
+      expect(exporterHealth?.spansDelivered).toBe(1);
+      expect(exporterHealth?.terminalFailedBatches).toBe(0);
     }).pipe(
       Effect.provide(
         deliveryLayer(
           options([exporter], {
             retry: { maxAttempts: 3, delay: "10 millis", jitter: 0 },
+          }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("counts terminal failed spans after retry exhaustion", () => {
+    const exporter: SpanExporter = {
+      name: "exhausted",
+      export: () => Effect.fail(exporterError("exhausted", "export", "retryable")),
+      flush: Effect.void,
+      shutdown: Effect.void,
+    };
+    return Effect.gen(function* () {
+      const sink = yield* CompletedSpanSink;
+      const delivery = yield* Delivery;
+      const segment = localSegment(60, [
+        { operation: "child", outcome: "success" },
+        { operation: "root", outcome: "success", root: true },
+      ]);
+      for (const item of segment) sink.unsafeOffer(item);
+      const flushing = yield* delivery.flush.pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 millis");
+      yield* Fiber.join(flushing);
+      const health = (yield* delivery.health).exporters.exhausted;
+      expect(health?.batchesAttempted).toBe(2);
+      expect(health?.spansAttempted).toBe(4);
+      expect(health?.retryAttempts).toBe(1);
+      expect(health?.terminalFailedBatches).toBe(1);
+      expect(health?.terminalFailedSpans).toBe(2);
+      expect(health?.spansDelivered).toBe(0);
+    }).pipe(
+      Effect.provide(
+        deliveryLayer(
+          options([exporter], {
+            retry: { maxAttempts: 2, delay: "10 millis", jitter: 0 },
           }),
         ),
       ),
@@ -377,7 +436,9 @@ describe("bounded delivery", () => {
       sink.unsafeOffer(span(1, "fanout"));
       yield* delivery.flush;
       expect(output.batches.flat()).toHaveLength(1);
-      expect((yield* delivery.health).exporterFailures).toBeGreaterThanOrEqual(1);
+      const health = yield* delivery.health;
+      expect(health.exporters.malicious?.terminalFailedBatches).toBe(1);
+      expect(health.exporters.healthy?.spansDelivered).toBe(1);
     }).pipe(Effect.provide(deliveryLayer(options([malicious, output.exporter]))));
   });
 
@@ -404,8 +465,8 @@ describe("bounded delivery", () => {
       yield* delivery.flush;
       const health = yield* delivery.health;
       expect(attempts).toBe(1);
-      expect(health.attemptTimeouts).toBe(1);
-      expect(health.disabledExporters).toBe(1);
+      expect(health.exporters.hung?.timeouts).toBe(1);
+      expect(health.exporters.hung?.circuitTransitions).toBe(1);
     }).pipe(
       Effect.provide(
         deliveryLayer(options([hung], { attemptTimeout: "10 millis", maxBatchAge: "1 hour" })),
@@ -430,7 +491,7 @@ describe("bounded delivery", () => {
       yield* Fiber.join(shuttingDown);
       const health = yield* delivery.health;
       expect(health.accepting).toBe(false);
-      expect(health.flushTimeouts).toBe(1);
+      expect(health.pipeline.shutdownDropped).toBe(1);
     }).pipe(
       Effect.provide(
         deliveryLayer(

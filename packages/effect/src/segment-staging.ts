@@ -20,15 +20,15 @@ interface OpenSegment {
 
 interface CachedDecision {
   readonly keep: boolean;
+  readonly dropKind?: "sampled" | "overflow";
   readonly expiresAt: number;
 }
 
 export interface SegmentStagingHealth {
-  sampled: number;
-  dropped: number;
-  overflowed: number;
-  segmentDrops: number;
-  lateSpans: number;
+  readonly record: (
+    counter: "retained" | "sampledOut" | "overflowDropped" | "segmentDrops" | "lateSpans",
+    amount?: number,
+  ) => void;
 }
 
 export interface SegmentStager {
@@ -37,6 +37,7 @@ export interface SegmentStager {
   readonly finalizeAll: (now: number) => Effect.Effect<void>;
   readonly nextDeadline: (now: number) => number | undefined;
   readonly openCount: () => number;
+  readonly stagedBytes: () => number;
 }
 
 export function makeSegmentStager(options: {
@@ -73,17 +74,17 @@ export function makeSegmentStager(options: {
     const decision = decideSegment(options.sampling, ordered, options.deterministicValue);
     cacheDecision(segment.id, {
       keep: decision.keep,
+      ...(decision.keep ? {} : { dropKind: "sampled" }),
       expiresAt: now + options.config.decisionCacheMaxAgeMs,
     });
     if (!decision.keep) {
-      options.health.dropped += ordered.length + segment.droppedSpans;
-      if (segment.droppedSpans > 0) options.health.overflowed += segment.droppedSpans;
+      options.health.record("sampledOut", ordered.length);
+      options.health.record("overflowDropped", segment.droppedSpans);
       return Effect.void;
     }
     const completed = annotateIncompleteRoot(ordered, segment.droppedSpans);
-    options.health.sampled += completed.length;
-    options.health.dropped += segment.droppedSpans;
-    if (segment.droppedSpans > 0) options.health.overflowed += segment.droppedSpans;
+    options.health.record("retained", completed.length);
+    options.health.record("overflowDropped", segment.droppedSpans);
     const [first, ...rest] = completed;
     return first === undefined ? Effect.void : options.emit([first, ...rest]);
   };
@@ -91,11 +92,11 @@ export function makeSegmentStager(options: {
   const evictSegment = (segment: OpenSegment, now: number) => {
     open.delete(segment.id);
     totalBytes -= segment.bytes;
-    options.health.dropped += segment.spans.length + segment.droppedSpans;
-    options.health.segmentDrops++;
-    options.health.overflowed += segment.spans.length + segment.droppedSpans;
+    options.health.record("overflowDropped", segment.spans.length + segment.droppedSpans);
+    options.health.record("segmentDrops");
     cacheDecision(segment.id, {
       keep: false,
+      dropKind: "overflow",
       expiresAt: now + options.config.decisionCacheMaxAgeMs,
     });
   };
@@ -119,13 +120,13 @@ export function makeSegmentStager(options: {
     const id = span.segmentId ?? span.spanId;
     const cached = decisions.get(id);
     if (cached !== undefined) {
-      options.health.lateSpans++;
+      options.health.record("lateSpans");
       if (!cached.keep) {
-        options.health.dropped++;
+        options.health.record(cached.dropKind === "overflow" ? "overflowDropped" : "sampledOut");
         return Effect.void;
       }
       const late = markLate(span);
-      options.health.sampled++;
+      options.health.record("retained");
       return options.emit([late]);
     }
 
@@ -133,11 +134,11 @@ export function makeSegmentStager(options: {
     const bytes = encodedBytes(span);
     if (segment === undefined) {
       if (!makeRoomForSegment(isRetainedEvidence(span, options.sampling), now)) {
-        options.health.dropped++;
-        options.health.overflowed++;
-        options.health.segmentDrops++;
+        options.health.record("overflowDropped");
+        options.health.record("segmentDrops");
         cacheDecision(id, {
           keep: false,
+          dropKind: "overflow",
           expiresAt: now + options.config.decisionCacheMaxAgeMs,
         });
         return Effect.void;
@@ -224,6 +225,7 @@ export function makeSegmentStager(options: {
       return earliest;
     },
     openCount: () => open.size,
+    stagedBytes: () => totalBytes,
   };
 }
 

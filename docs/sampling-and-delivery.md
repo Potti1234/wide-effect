@@ -21,10 +21,12 @@ oldest accepted evidence matters, or `drop-oldest` when recent evidence is more 
 finite batch size/age, retry count and backoff, attempt timeout, concurrency, and final flush timeout.
 Retry state is bounded, and one failed or hung exporter is isolated from the others.
 
-Capacity is an operational budget, not a reliability guarantee. Monitor accepted, sampled,
-exported, retried, dropped, overflowed, and flush-timeout counts. Exporter failure never changes a
-business Effect's result. Shutdown must close the scoped runtime and inspect its explicit flush
-result; do not assume process exit drains telemetry.
+Capacity is an operational budget, not a reliability guarantee. Monitor the exact nested
+`Delivery.health` pipeline and per-exporter counters rather than deriving unique-span totals from
+fan-out attempts. Pipeline retention is counted once; exporter attempts, deliveries, retries, and
+terminal failures are counted independently for every configured exporter. Exporter failure never
+changes a business Effect's result. Shutdown must close the scoped runtime and inspect its explicit
+flush result; do not assume process exit drains telemetry.
 
 Delivery stages normalized spans by local segment and makes one aggregate decision. A retained
 outcome, configured HTTP status, slow span, or important operation retains the ordered segment;

@@ -9,6 +9,21 @@ overflow or export failure, not isolated retry noise. Treat an exporter outage a
 observability: requests continue, memory remains bounded, and shutdown terminates at its configured
 limit.
 
+`Delivery.health` is organized as one pipeline snapshot plus a bounded record keyed by validated,
+configuration-time exporter names. Pipeline counters distinguish completed, accepted, retained,
+sampled-out, overflow-dropped, and shutdown-dropped spans. Exporter counters distinguish attempts,
+successful deliveries, retries, terminal failures, timeouts, circuit transitions, and flush/shutdown
+failures. `retained` counts each unique span once; exporter span counts intentionally count fan-out.
+Admission reconciles as `completed = accepted + admission overflow + shutdown rejection`; accepted
+spans later become retained, sampled out, or staging-overflow dropped. During forced shutdown, retained
+work that cannot finish additionally increments `shutdownDropped`.
+
+The same deltas update Effect metrics named `wide_effect_delivery_pipeline_spans_total` and
+`wide_effect_delivery_exporter_total`; queue depth, open segments, and staged bytes use gauges with
+the corresponding `wide_effect_delivery_*` names. Labels are limited to fixed state values and the
+validated exporter name. The synchronous tracer completion hook uses a small atomic `Ref` adapter;
+all asynchronous staging, retry, and exporter transitions remain owned by the scoped consumer fiber.
+
 Size segment staging from the documented limits: the hard ceiling is `maxTotalBytes` plus queue
 capacity times the maximum encoded `FlowSpan`, decision-cache entries, and small map overhead. Monitor
 `openSegments`, `segmentDrops`, `lateSpans`, overflow, and dropped-span totals without attaching trace

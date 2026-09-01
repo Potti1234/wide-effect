@@ -19,6 +19,11 @@ import {
   Schema,
 } from "effect";
 import type { SpanBatch, SpanExporter } from "./exporter.js";
+import {
+  makeDeliveryHealthTracker,
+  type DeliveryHealthSnapshot,
+  type DeliveryHealthTracker,
+} from "./delivery-health.js";
 import { makeSegmentStager, type SegmentStager } from "./segment-staging.js";
 import { CompletedSpanSink } from "./sink.js";
 
@@ -45,23 +50,11 @@ export interface DeliveryOptions {
   readonly staging?: SegmentStagingConfigType | undefined;
 }
 
-export interface DeliveryHealthSnapshot {
-  readonly accepting: boolean;
-  readonly queueDepth: number;
-  readonly accepted: number;
-  readonly sampled: number;
-  readonly exported: number;
-  readonly retried: number;
-  readonly dropped: number;
-  readonly overflowed: number;
-  readonly exporterFailures: number;
-  readonly attemptTimeouts: number;
-  readonly disabledExporters: number;
-  readonly flushTimeouts: number;
-  readonly openSegments: number;
-  readonly segmentDrops: number;
-  readonly lateSpans: number;
-}
+export type {
+  DeliveryHealthSnapshot,
+  ExporterHealthSnapshot,
+  PipelineHealthSnapshot,
+} from "./delivery-health.js";
 
 export interface DeliveryService {
   readonly health: Effect.Effect<DeliveryHealthSnapshot>;
@@ -94,7 +87,8 @@ export const deliveryLayer = (input: DeliveryOptions) =>
         : Queue.sliding<FlowSpan>(options.capacity);
       const controls = yield* Queue.bounded<Control>(1);
       const shutdownDone = yield* Deferred.make<void>();
-      const health = makeHealth();
+      const exporterNames = validateExporterNames(options.exporters);
+      const health = yield* makeDeliveryHealthTracker(exporterNames);
       const disabledExporters = new WeakSet<SpanExporter>();
       let stopping = false;
 
@@ -105,13 +99,17 @@ export const deliveryLayer = (input: DeliveryOptions) =>
               options.exporters,
               (exporter) => exportWithRetry(exporter, batch, options, health, disabledExporters),
               { concurrency: "unbounded", discard: true },
+            ).pipe(
+              Effect.onInterrupt(() =>
+                Effect.sync(() => health.incrementPipeline("shutdownDropped", batch.length)),
+              ),
             );
       const stager = makeSegmentStager({
         config: options.staging,
         sampling: options.sampling,
         deterministicValue: options.deterministicValue,
         emit: exportBatch,
-        health,
+        health: { record: health.incrementPipeline },
       });
 
       const flushExporters = Effect.forEach(
@@ -143,7 +141,7 @@ export const deliveryLayer = (input: DeliveryOptions) =>
       const shutdown = Effect.suspend(() => {
         if (!stopping) {
           stopping = true;
-          health.accepting = false;
+          health.setAccepting(false);
           return Queue.offer(controls, { _tag: "Shutdown" }).pipe(
             Effect.andThen(Deferred.await(shutdownDone)),
             Effect.andThen(shutdownExporters(options, health, disabledExporters)),
@@ -152,11 +150,6 @@ export const deliveryLayer = (input: DeliveryOptions) =>
             Effect.ensuring(Fiber.interrupt(fiber)),
             Effect.ensuring(Deferred.succeed(shutdownDone, undefined)),
             Effect.timeoutOption(options.shutdownTimeout),
-            Effect.tap((result) =>
-              Effect.sync(() => {
-                if (Option.isNone(result)) health.flushTimeouts++;
-              }),
-            ),
             Effect.asVoid,
           );
         }
@@ -179,26 +172,30 @@ export const deliveryLayer = (input: DeliveryOptions) =>
 
       const sink = CompletedSpanSink.of({
         unsafeOffer: (span) => {
-          if (!health.accepting) {
-            health.dropped++;
+          health.incrementPipeline("completed");
+          if (stopping) {
+            health.incrementPipeline("shutdownDropped");
             return;
           }
           const full = Queue.sizeUnsafe(spans) >= options.capacity;
           const offered = Queue.offerUnsafe(spans, span);
           if (full) {
-            health.overflowed++;
-            health.dropped++;
+            health.incrementPipeline("overflowDropped");
           }
           if (!offered) {
-            if (!full) health.dropped++;
+            if (!full) health.incrementPipeline("overflowDropped");
             return;
           }
-          health.accepted++;
+          health.incrementPipeline("accepted");
         },
       });
       const service = Delivery.of({
-        health: Effect.sync(() =>
-          snapshotHealth(health, Queue.sizeUnsafe(spans), stager.openCount()),
+        health: Effect.suspend(() =>
+          health.snapshot({
+            queueDepth: Queue.sizeUnsafe(spans),
+            openSegments: stager.openCount(),
+            stagedBytes: stager.stagedBytes(),
+          }),
         ),
         flush,
         shutdown,
@@ -254,26 +251,36 @@ function exportWithRetry(
   exporter: SpanExporter,
   batch: SpanBatch,
   options: DeliveryOptions,
-  health: MutableHealth,
+  health: DeliveryHealthTracker,
   disabledExporters: WeakSet<SpanExporter>,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
     if (disabledExporters.has(exporter)) return;
+    const exporterName = safeExporterName(exporter);
     for (let attempt = 1; attempt <= options.retry.maxAttempts; attempt++) {
-      const result = yield* attemptExporter(() => exporter.export(batch), options, health);
+      health.incrementExporter(exporterName, "batchesAttempted");
+      health.incrementExporter(exporterName, "spansAttempted", batch.length);
+      const result = yield* attemptExporter(() => exporter.export(batch), options);
       if (result === "success") {
-        health.exported += batch.length;
+        health.incrementExporter(exporterName, "batchesDelivered");
+        health.incrementExporter(exporterName, "spansDelivered", batch.length);
         return;
       }
-      health.exporterFailures++;
       if (result === "timeout") {
+        health.incrementExporter(exporterName, "timeouts");
+        health.incrementExporter(exporterName, "terminalFailedBatches");
+        health.incrementExporter(exporterName, "terminalFailedSpans", batch.length);
         disabledExporters.add(exporter);
-        health.disabledExporters++;
+        health.incrementExporter(exporterName, "circuitTransitions");
         return;
       }
-      if (attempt === options.retry.maxAttempts) return;
-      health.retried++;
-      yield* Effect.sleep(retryDelay(options.retry, attempt, safeExporterName(exporter)));
+      if (attempt === options.retry.maxAttempts) {
+        health.incrementExporter(exporterName, "terminalFailedBatches");
+        health.incrementExporter(exporterName, "terminalFailedSpans", batch.length);
+        return;
+      }
+      health.incrementExporter(exporterName, "retryAttempts");
+      yield* Effect.sleep(retryDelay(options.retry, attempt, exporterName));
     }
   });
 }
@@ -282,16 +289,27 @@ function runExporterOperation(
   exporter: SpanExporter,
   operation: () => Effect.Effect<void, unknown>,
   options: DeliveryOptions,
-  health: MutableHealth,
+  health: DeliveryHealthTracker,
   disabledExporters: WeakSet<SpanExporter>,
+  operationName: "flush" | "shutdown" = "flush",
 ): Effect.Effect<void> {
   if (disabledExporters.has(exporter)) return Effect.void;
-  return Effect.flatMap(attemptExporter(operation, options, health), (success) =>
+  const exporterName = safeExporterName(exporter);
+  return Effect.flatMap(attemptExporter(operation, options), (result) =>
     Effect.sync(() => {
-      if (success !== "success") health.exporterFailures++;
-      if (success === "timeout") {
+      if (result === "failure")
+        health.incrementExporter(
+          exporterName,
+          operationName === "flush" ? "flushFailures" : "shutdownFailures",
+        );
+      if (result === "timeout") {
+        health.incrementExporter(exporterName, "timeouts");
+        health.incrementExporter(
+          exporterName,
+          operationName === "flush" ? "flushTimeouts" : "shutdownTimeouts",
+        );
         disabledExporters.add(exporter);
-        health.disabledExporters++;
+        health.incrementExporter(exporterName, "circuitTransitions");
       }
     }),
   );
@@ -300,13 +318,11 @@ function runExporterOperation(
 function attemptExporter(
   operation: () => Effect.Effect<void, unknown>,
   options: DeliveryOptions,
-  health: MutableHealth,
 ): Effect.Effect<"success" | "failure" | "timeout"> {
   return Effect.gen(function* () {
     const fiber = yield* Effect.suspend(operation).pipe(Effect.forkDetach);
     const result = yield* Fiber.await(fiber).pipe(Effect.timeoutOption(options.attemptTimeout));
     if (Option.isNone(result)) {
-      health.attemptTimeouts++;
       fiber.interruptUnsafe();
       return "timeout" as const;
     }
@@ -316,13 +332,20 @@ function attemptExporter(
 
 function shutdownExporters(
   options: DeliveryOptions,
-  health: MutableHealth,
+  health: DeliveryHealthTracker,
   disabledExporters: WeakSet<SpanExporter>,
 ) {
   return Effect.forEach(
     options.exporters,
     (exporter) =>
-      runExporterOperation(exporter, () => exporter.shutdown, options, health, disabledExporters),
+      runExporterOperation(
+        exporter,
+        () => exporter.shutdown,
+        options,
+        health,
+        disabledExporters,
+        "shutdown",
+      ),
     { concurrency: "unbounded", discard: true },
   );
 }
@@ -389,44 +412,14 @@ const defaultSegmentStaging: SegmentStagingConfigType = {
   decisionCacheMaxAgeMs: 60_000,
 };
 
-interface MutableHealth {
-  accepting: boolean;
-  accepted: number;
-  sampled: number;
-  exported: number;
-  retried: number;
-  dropped: number;
-  overflowed: number;
-  exporterFailures: number;
-  attemptTimeouts: number;
-  disabledExporters: number;
-  flushTimeouts: number;
-  segmentDrops: number;
-  lateSpans: number;
-}
-
-function makeHealth(): MutableHealth {
-  return {
-    accepting: true,
-    accepted: 0,
-    sampled: 0,
-    exported: 0,
-    retried: 0,
-    dropped: 0,
-    overflowed: 0,
-    exporterFailures: 0,
-    attemptTimeouts: 0,
-    disabledExporters: 0,
-    flushTimeouts: 0,
-    segmentDrops: 0,
-    lateSpans: 0,
-  };
-}
-
-function snapshotHealth(
-  health: MutableHealth,
-  queueDepth: number,
-  openSegments: number,
-): DeliveryHealthSnapshot {
-  return { ...health, queueDepth, openSegments };
+function validateExporterNames(exporters: ReadonlyArray<SpanExporter>): Array<string> {
+  const names = exporters.map(safeExporterName);
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (!/^[a-z][a-z0-9._-]{0,63}$/.test(name))
+      throw new RangeError("exporter names must be stable lowercase machine names");
+    if (seen.has(name)) throw new RangeError(`duplicate exporter name: ${name}`);
+    seen.add(name);
+  }
+  return names;
 }

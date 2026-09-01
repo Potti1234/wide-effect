@@ -18,6 +18,13 @@ therefore dispatch once. Its in-memory state fixture models `claimed`, `triaging
 `ticketed`, and `needs_human`; a real consumer must put those claims and leases in its durable workflow
 database. ClickHouse is evidence storage, not a mutable job queue.
 
+The triage stage fetches same-trace envelopes within explicit time, count, and byte limits and decodes
+each envelope again before building the shared `DiagnosticBundle`. Timeline ordering is deterministic.
+Repository access is a separate authorized source request keyed by allowlisted repository and commit;
+bounded filenames/symbols/patches are workflow inputs only and are never copied into `FlowSpan`,
+ClickHouse, the diagnostic bundle, or the simulated ticket. Ticket analysis is marked as untrusted
+automation and contains a trace query command instead of embedded raw telemetry.
+
 Run deterministic checks without Docker:
 
 ```sh

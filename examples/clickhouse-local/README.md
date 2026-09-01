@@ -11,6 +11,13 @@ is an at-least-once strategy, not an exactly-once claim: queries that require on
 ClickHouse database policy, seven-day fixture TTL, credentials, indexes, polling, and ticket workflow
 remain in this example rather than the reusable packages.
 
+The alert proof decodes bounded rules containing values, never SQL fragments. It reads with a stable
+`(ingested_at, span_id)` cursor and an explicit overlap window, then atomically claims the deterministic
+`(rule_id, trace_id, span_id)` incident key. Duplicate rows, repeated polls, and concurrent pollers
+therefore dispatch once. Its in-memory state fixture models `claimed`, `triaging`, `retry_wait`,
+`ticketed`, and `needs_human`; a real consumer must put those claims and leases in its durable workflow
+database. ClickHouse is evidence storage, not a mutable job queue.
+
 Run deterministic checks without Docker:
 
 ```sh

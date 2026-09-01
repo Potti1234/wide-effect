@@ -23,6 +23,9 @@ The same deltas update Effect metrics named `wide_effect_delivery_pipeline_spans
 the corresponding `wide_effect_delivery_*` names. Labels are limited to fixed state values and the
 validated exporter name. The synchronous tracer completion hook uses a small atomic `Ref` adapter;
 all asynchronous staging, retry, and exporter transitions remain owned by the scoped consumer fiber.
+Circuit transition counts include opening, entering half-open, reopening, and returning to closed.
+An open circuit rejects a retained batch as terminally failed for that exporter; it does not affect
+delivery to other exporters or the business operation.
 
 Size segment staging from the documented limits: the hard ceiling is `maxTotalBytes` plus queue
 capacity times the maximum encoded `FlowSpan`, decision-cache entries, and small map overhead. Monitor

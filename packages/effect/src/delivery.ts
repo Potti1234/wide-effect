@@ -16,6 +16,7 @@ import {
   Layer,
   Option,
   Queue,
+  Ref,
   Schema,
 } from "effect";
 import type { SpanBatch, SpanExporter } from "./exporter.js";
@@ -36,6 +37,12 @@ export interface RetryPolicy {
   readonly jitterValue?: (attempt: number, exporter: string) => number;
 }
 
+export interface ExporterCircuitOptions {
+  readonly failureThreshold: number;
+  readonly openDuration: Duration.Input;
+  readonly probeTimeout: Duration.Input;
+}
+
 export interface DeliveryOptions {
   readonly exporters: ReadonlyArray<SpanExporter>;
   readonly capacity: number;
@@ -45,6 +52,7 @@ export interface DeliveryOptions {
   readonly attemptTimeout: Duration.Input;
   readonly shutdownTimeout: Duration.Input;
   readonly retry: RetryPolicy;
+  readonly circuit?: ExporterCircuitOptions;
   readonly sampling: SamplingConfig;
   readonly deterministicValue?: (span: FlowSpan) => number;
   readonly staging?: SegmentStagingConfigType | undefined;
@@ -89,7 +97,12 @@ export const deliveryLayer = (input: DeliveryOptions) =>
       const shutdownDone = yield* Deferred.make<void>();
       const exporterNames = validateExporterNames(options.exporters);
       const health = yield* makeDeliveryHealthTracker(exporterNames);
-      const disabledExporters = new WeakSet<SpanExporter>();
+      const circuitEntries = yield* Effect.forEach(options.exporters, (exporter) =>
+        Ref.make<CircuitState>({ _tag: "Closed", failures: 0 }).pipe(
+          Effect.map((state) => [exporter, state] as const),
+        ),
+      );
+      const circuits = new Map(circuitEntries);
       let stopping = false;
 
       const exportBatch = (batch: SpanBatch) =>
@@ -97,7 +110,7 @@ export const deliveryLayer = (input: DeliveryOptions) =>
           ? Effect.void
           : Effect.forEach(
               options.exporters,
-              (exporter) => exportWithRetry(exporter, batch, options, health, disabledExporters),
+              (exporter) => exportWithRetry(exporter, batch, options, health, circuits),
               { concurrency: "unbounded", discard: true },
             ).pipe(
               Effect.onInterrupt(() =>
@@ -115,7 +128,7 @@ export const deliveryLayer = (input: DeliveryOptions) =>
       const flushExporters = Effect.forEach(
         options.exporters,
         (exporter) =>
-          runExporterOperation(exporter, () => exporter.flush, options, health, disabledExporters),
+          runExporterOperation(exporter, () => exporter.flush, options, health, circuits),
         { concurrency: "unbounded", discard: true },
       );
 
@@ -144,7 +157,7 @@ export const deliveryLayer = (input: DeliveryOptions) =>
           health.setAccepting(false);
           return Queue.offer(controls, { _tag: "Shutdown" }).pipe(
             Effect.andThen(Deferred.await(shutdownDone)),
-            Effect.andThen(shutdownExporters(options, health, disabledExporters)),
+            Effect.andThen(shutdownExporters(options, health, circuits)),
             Effect.ensuring(Queue.shutdown(spans)),
             Effect.ensuring(Queue.shutdown(controls)),
             Effect.ensuring(Fiber.interrupt(fiber)),
@@ -247,38 +260,149 @@ function consumerLoop(
   });
 }
 
+type CircuitState =
+  | { readonly _tag: "Closed"; readonly failures: number }
+  | { readonly _tag: "Retrying"; readonly failures: number }
+  | {
+      readonly _tag: "Open";
+      readonly reopenAt: number;
+      readonly stuckFiber?: Fiber.Fiber<void, unknown>;
+    }
+  | { readonly _tag: "HalfOpen" };
+
+type ExporterCircuitState = Ref.Ref<CircuitState>;
+
+function enterCircuit(
+  circuit: ExporterCircuitState,
+  options: ResolvedDeliveryOptions,
+  health: DeliveryHealthTracker,
+  exporterName: string,
+): Effect.Effect<"normal" | "probe" | "blocked"> {
+  return Effect.gen(function* () {
+    const state = yield* Ref.get(circuit);
+    if (state._tag !== "Open") return state._tag === "HalfOpen" ? "blocked" : "normal";
+    if (state.stuckFiber !== undefined && state.stuckFiber.pollUnsafe() === undefined)
+      return "blocked";
+    const now = yield* Clock.currentTimeMillis;
+    if (now < state.reopenAt) return "blocked";
+    yield* Ref.set(circuit, { _tag: "HalfOpen" });
+    health.incrementExporter(exporterName, "circuitTransitions");
+    return "probe";
+  });
+}
+
+function markRetrying(circuit: ExporterCircuitState): Effect.Effect<void> {
+  return Ref.update(circuit, (state) =>
+    state._tag === "Closed" ? { _tag: "Retrying" as const, failures: state.failures } : state,
+  );
+}
+
+function closeCircuit(
+  circuit: ExporterCircuitState,
+  health: DeliveryHealthTracker,
+  exporterName: string,
+): Effect.Effect<void> {
+  return Effect.flatMap(Ref.get(circuit), (state) => {
+    if (state._tag === "Closed" && state.failures === 0) return Effect.void;
+    return Ref.set(circuit, { _tag: "Closed", failures: 0 }).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => health.incrementExporter(exporterName, "circuitTransitions")),
+      ),
+    );
+  });
+}
+
+function failCircuit(
+  circuit: ExporterCircuitState,
+  options: ResolvedDeliveryOptions,
+  health: DeliveryHealthTracker,
+  exporterName: string,
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const state = yield* Ref.get(circuit);
+    if (state._tag === "HalfOpen") {
+      yield* openCircuit(circuit, options, health, exporterName);
+      return;
+    }
+    const failures =
+      (state._tag === "Closed" || state._tag === "Retrying" ? state.failures : 0) + 1;
+    if (failures >= options.circuit.failureThreshold) {
+      yield* openCircuit(circuit, options, health, exporterName);
+    } else {
+      yield* Ref.set(circuit, { _tag: "Closed", failures });
+    }
+  });
+}
+
+function openCircuit(
+  circuit: ExporterCircuitState,
+  options: ResolvedDeliveryOptions,
+  health: DeliveryHealthTracker,
+  exporterName: string,
+  stuckFiber?: Fiber.Fiber<void, unknown>,
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    yield* Ref.set(circuit, {
+      _tag: "Open",
+      reopenAt: now + options.circuit.openDurationMs,
+      ...(stuckFiber === undefined ? {} : { stuckFiber }),
+    });
+    health.incrementExporter(exporterName, "circuitTransitions");
+  });
+}
+
+function recordTerminalFailure(
+  health: DeliveryHealthTracker,
+  exporterName: string,
+  spanCount: number,
+): void {
+  health.incrementExporter(exporterName, "terminalFailedBatches");
+  health.incrementExporter(exporterName, "terminalFailedSpans", spanCount);
+}
+
 function exportWithRetry(
   exporter: SpanExporter,
   batch: SpanBatch,
-  options: DeliveryOptions,
+  options: ResolvedDeliveryOptions,
   health: DeliveryHealthTracker,
-  disabledExporters: WeakSet<SpanExporter>,
+  circuits: ReadonlyMap<SpanExporter, ExporterCircuitState>,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
-    if (disabledExporters.has(exporter)) return;
     const exporterName = safeExporterName(exporter);
-    for (let attempt = 1; attempt <= options.retry.maxAttempts; attempt++) {
+    const circuit = circuits.get(exporter);
+    if (circuit === undefined) return;
+    const gate = yield* enterCircuit(circuit, options, health, exporterName);
+    if (gate === "blocked") {
+      recordTerminalFailure(health, exporterName, batch.length);
+      return;
+    }
+    const maxAttempts = gate === "probe" ? 1 : options.retry.maxAttempts;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       health.incrementExporter(exporterName, "batchesAttempted");
       health.incrementExporter(exporterName, "spansAttempted", batch.length);
-      const result = yield* attemptExporter(() => exporter.export(batch), options);
+      const result = yield* attemptExporter(
+        () => exporter.export(batch),
+        gate === "probe" ? options.circuit.probeTimeoutMs : options.attemptTimeout,
+      );
       if (result === "success") {
+        yield* closeCircuit(circuit, health, exporterName);
         health.incrementExporter(exporterName, "batchesDelivered");
         health.incrementExporter(exporterName, "spansDelivered", batch.length);
         return;
       }
-      if (result === "timeout") {
+      if (typeof result !== "string") {
         health.incrementExporter(exporterName, "timeouts");
-        health.incrementExporter(exporterName, "terminalFailedBatches");
-        health.incrementExporter(exporterName, "terminalFailedSpans", batch.length);
-        disabledExporters.add(exporter);
-        health.incrementExporter(exporterName, "circuitTransitions");
+        yield* openCircuit(circuit, options, health, exporterName, result.fiber);
+        recordTerminalFailure(health, exporterName, batch.length);
         return;
       }
-      if (attempt === options.retry.maxAttempts) {
-        health.incrementExporter(exporterName, "terminalFailedBatches");
-        health.incrementExporter(exporterName, "terminalFailedSpans", batch.length);
+      if (attempt === maxAttempts) {
+        yield* failCircuit(circuit, options, health, exporterName);
+        recordTerminalFailure(health, exporterName, batch.length);
         return;
       }
+      yield* markRetrying(circuit);
       health.incrementExporter(exporterName, "retryAttempts");
       yield* Effect.sleep(retryDelay(options.retry, attempt, exporterName));
     }
@@ -288,52 +412,55 @@ function exportWithRetry(
 function runExporterOperation(
   exporter: SpanExporter,
   operation: () => Effect.Effect<void, unknown>,
-  options: DeliveryOptions,
+  options: ResolvedDeliveryOptions,
   health: DeliveryHealthTracker,
-  disabledExporters: WeakSet<SpanExporter>,
+  circuits: ReadonlyMap<SpanExporter, ExporterCircuitState>,
   operationName: "flush" | "shutdown" = "flush",
 ): Effect.Effect<void> {
-  if (disabledExporters.has(exporter)) return Effect.void;
-  const exporterName = safeExporterName(exporter);
-  return Effect.flatMap(attemptExporter(operation, options), (result) =>
-    Effect.sync(() => {
-      if (result === "failure")
-        health.incrementExporter(
-          exporterName,
-          operationName === "flush" ? "flushFailures" : "shutdownFailures",
-        );
-      if (result === "timeout") {
-        health.incrementExporter(exporterName, "timeouts");
-        health.incrementExporter(
-          exporterName,
-          operationName === "flush" ? "flushTimeouts" : "shutdownTimeouts",
-        );
-        disabledExporters.add(exporter);
-        health.incrementExporter(exporterName, "circuitTransitions");
-      }
-    }),
-  );
+  return Effect.gen(function* () {
+    const exporterName = safeExporterName(exporter);
+    const circuit = circuits.get(exporter);
+    if (circuit === undefined) return;
+    const circuitState = yield* Ref.get(circuit);
+    if (circuitState._tag === "Open" || circuitState._tag === "HalfOpen") return;
+    const result = yield* attemptExporter(operation, options.attemptTimeout);
+    if (result === "failure")
+      health.incrementExporter(
+        exporterName,
+        operationName === "flush" ? "flushFailures" : "shutdownFailures",
+      );
+    if (typeof result !== "string") {
+      health.incrementExporter(exporterName, "timeouts");
+      health.incrementExporter(
+        exporterName,
+        operationName === "flush" ? "flushTimeouts" : "shutdownTimeouts",
+      );
+      yield* openCircuit(circuit, options, health, exporterName, result.fiber);
+    }
+  });
 }
 
 function attemptExporter(
   operation: () => Effect.Effect<void, unknown>,
-  options: DeliveryOptions,
-): Effect.Effect<"success" | "failure" | "timeout"> {
+  timeout: Duration.Input,
+): Effect.Effect<
+  "success" | "failure" | { readonly _tag: "Timeout"; readonly fiber: Fiber.Fiber<void, unknown> }
+> {
   return Effect.gen(function* () {
     const fiber = yield* Effect.suspend(operation).pipe(Effect.forkDetach);
-    const result = yield* Fiber.await(fiber).pipe(Effect.timeoutOption(options.attemptTimeout));
+    const result = yield* Fiber.await(fiber).pipe(Effect.timeoutOption(timeout));
     if (Option.isNone(result)) {
       fiber.interruptUnsafe();
-      return "timeout" as const;
+      return { _tag: "Timeout" as const, fiber };
     }
     return Exit.isSuccess(result.value) ? ("success" as const) : ("failure" as const);
   });
 }
 
 function shutdownExporters(
-  options: DeliveryOptions,
+  options: ResolvedDeliveryOptions,
   health: DeliveryHealthTracker,
-  disabledExporters: WeakSet<SpanExporter>,
+  circuits: ReadonlyMap<SpanExporter, ExporterCircuitState>,
 ) {
   return Effect.forEach(
     options.exporters,
@@ -343,7 +470,7 @@ function shutdownExporters(
         () => exporter.shutdown,
         options,
         health,
-        disabledExporters,
+        circuits,
         "shutdown",
       ),
     { concurrency: "unbounded", discard: true },
@@ -371,9 +498,16 @@ function safeExporterName(exporter: SpanExporter): string {
   }
 }
 
-type ResolvedDeliveryOptions = Omit<DeliveryOptions, "staging"> & {
+type ResolvedDeliveryOptions = Omit<DeliveryOptions, "staging" | "circuit"> & {
   readonly staging: SegmentStagingConfigType;
+  readonly circuit: ResolvedExporterCircuitOptions;
 };
+
+interface ResolvedExporterCircuitOptions {
+  readonly failureThreshold: number;
+  readonly openDurationMs: number;
+  readonly probeTimeoutMs: number;
+}
 
 function validateOptions(options: DeliveryOptions): ResolvedDeliveryOptions {
   if (!Number.isInteger(options.capacity) || options.capacity < 1)
@@ -388,6 +522,29 @@ function validateOptions(options: DeliveryOptions): ResolvedDeliveryOptions {
     options.retry.jitter > 1
   )
     throw new RangeError("jitter must be between zero and one");
+  const circuit = options.circuit ?? defaultExporterCircuit;
+  const deliveryLimits = Schema.decodeUnknownSync(
+    Schema.Struct({
+      failureThreshold: Schema.Number,
+      openDurationMs: Schema.Number,
+      probeTimeoutMs: Schema.Number,
+      maxAttempts: Schema.Number,
+    }),
+    { onExcessProperty: "error" },
+  )({
+    failureThreshold: circuit.failureThreshold,
+    openDurationMs: Duration.toMillis(circuit.openDuration),
+    probeTimeoutMs: Duration.toMillis(circuit.probeTimeout),
+    maxAttempts: options.retry.maxAttempts,
+  });
+  if (!Number.isInteger(deliveryLimits.failureThreshold) || deliveryLimits.failureThreshold < 1)
+    throw new RangeError("circuit failureThreshold must be positive");
+  if (!Number.isFinite(deliveryLimits.openDurationMs) || deliveryLimits.openDurationMs < 0)
+    throw new RangeError("circuit openDuration must be non-negative");
+  if (!Number.isFinite(deliveryLimits.probeTimeoutMs) || deliveryLimits.probeTimeoutMs < 0)
+    throw new RangeError("circuit probeTimeout must be non-negative");
+  if (!Number.isInteger(deliveryLimits.maxAttempts) || deliveryLimits.maxAttempts < 1)
+    throw new RangeError("maxAttempts must be positive");
   return {
     ...options,
     sampling: normalizeSamplingConfig(
@@ -397,8 +554,19 @@ function validateOptions(options: DeliveryOptions): ResolvedDeliveryOptions {
       options.staging ?? defaultSegmentStaging,
       { onExcessProperty: "error" },
     ),
+    circuit: {
+      failureThreshold: deliveryLimits.failureThreshold,
+      openDurationMs: deliveryLimits.openDurationMs,
+      probeTimeoutMs: deliveryLimits.probeTimeoutMs,
+    },
   };
 }
+
+const defaultExporterCircuit: ExporterCircuitOptions = {
+  failureThreshold: 1,
+  openDuration: "30 seconds",
+  probeTimeout: "5 seconds",
+};
 
 const defaultSegmentStaging: SegmentStagingConfigType = {
   maxOpenSegments: 1_024,

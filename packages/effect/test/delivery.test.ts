@@ -442,13 +442,13 @@ describe("bounded delivery", () => {
     }).pipe(Effect.provide(deliveryLayer(options([malicious, output.exporter]))));
   });
 
-  it.effect("opens a lifetime circuit after one hung exporter attempt", () => {
+  it.effect("recovers a timed-out exporter through one successful half-open probe", () => {
     let attempts = 0;
-    const hung: SpanExporter = {
-      name: "hung",
+    const recovering: SpanExporter = {
+      name: "recovering",
       export: () => {
         attempts++;
-        return Effect.uninterruptible(Effect.never);
+        return attempts === 1 ? Effect.never : Effect.void;
       },
       flush: Effect.void,
       shutdown: Effect.void,
@@ -461,15 +461,177 @@ describe("bounded delivery", () => {
       yield* Effect.yieldNow;
       yield* TestClock.adjust("10 millis");
       yield* Fiber.join(first);
+      yield* TestClock.adjust("20 millis");
       sink.unsafeOffer(span(2, "second"));
       yield* delivery.flush;
       const health = yield* delivery.health;
-      expect(attempts).toBe(1);
-      expect(health.exporters.hung?.timeouts).toBe(1);
-      expect(health.exporters.hung?.circuitTransitions).toBe(1);
+      expect(attempts).toBe(2);
+      expect(health.exporters.recovering?.timeouts).toBe(1);
+      expect(health.exporters.recovering?.spansDelivered).toBe(1);
+      expect(health.exporters.recovering?.circuitTransitions).toBe(3);
     }).pipe(
       Effect.provide(
-        deliveryLayer(options([hung], { attemptTimeout: "10 millis", maxBatchAge: "1 hour" })),
+        deliveryLayer(
+          options([recovering], {
+            attemptTimeout: "10 millis",
+            maxBatchAge: "1 hour",
+            circuit: {
+              failureThreshold: 1,
+              openDuration: "20 millis",
+              probeTimeout: "10 millis",
+            },
+          }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("reopens after a failed half-open probe", () => {
+    let attempts = 0;
+    const exporter: SpanExporter = {
+      name: "reopening",
+      export: () => {
+        attempts++;
+        return attempts === 1
+          ? Effect.never
+          : Effect.fail(exporterError("reopening", "export", "probe failed"));
+      },
+      flush: Effect.void,
+      shutdown: Effect.void,
+    };
+    return Effect.gen(function* () {
+      const sink = yield* CompletedSpanSink;
+      const delivery = yield* Delivery;
+      sink.unsafeOffer(span(1, "timeout"));
+      const first = yield* delivery.flush.pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 millis");
+      yield* Fiber.join(first);
+      yield* TestClock.adjust("20 millis");
+      sink.unsafeOffer(span(2, "failed-probe"));
+      yield* delivery.flush;
+      sink.unsafeOffer(span(3, "blocked"));
+      yield* delivery.flush;
+      expect(attempts).toBe(2);
+      const health = (yield* delivery.health).exporters.reopening;
+      expect(health?.terminalFailedBatches).toBe(3);
+      expect(health?.circuitTransitions).toBe(3);
+    }).pipe(
+      Effect.provide(
+        deliveryLayer(
+          options([exporter], {
+            attemptTimeout: "10 millis",
+            circuit: {
+              failureThreshold: 1,
+              openDuration: "20 millis",
+              probeTimeout: "10 millis",
+            },
+          }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("allows only one stuck exporter fiber while healthy fan-out proceeds", () => {
+    let hungAttempts = 0;
+    const hung: SpanExporter = {
+      name: "stuck",
+      export: () => {
+        hungAttempts++;
+        return Effect.uninterruptible(Effect.never);
+      },
+      flush: Effect.void,
+      shutdown: Effect.void,
+    };
+    const healthy = memoryExporter("healthy-circuit");
+    return Effect.gen(function* () {
+      const sink = yield* CompletedSpanSink;
+      const delivery = yield* Delivery;
+      sink.unsafeOffer(span(1, "first"));
+      const first = yield* delivery.flush.pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 millis");
+      yield* Fiber.join(first);
+      yield* TestClock.adjust("20 millis");
+      sink.unsafeOffer(span(2, "second"));
+      yield* delivery.flush;
+      expect(hungAttempts).toBe(1);
+      expect(healthy.batches.flat()).toHaveLength(2);
+      expect((yield* delivery.health).exporters.stuck?.terminalFailedBatches).toBe(2);
+    }).pipe(
+      Effect.provide(
+        deliveryLayer(
+          options([hung, healthy.exporter], {
+            attemptTimeout: "10 millis",
+            circuit: {
+              failureThreshold: 1,
+              openDuration: "20 millis",
+              probeTimeout: "10 millis",
+            },
+          }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("counts flush and shutdown failures independently", () => {
+    const exporter: SpanExporter = {
+      name: "lifecycle-failure",
+      export: () => Effect.void,
+      flush: Effect.fail(exporterError("lifecycle-failure", "flush", "failed")),
+      shutdown: Effect.fail(exporterError("lifecycle-failure", "shutdown", "failed")),
+    };
+    return Effect.gen(function* () {
+      const delivery = yield* Delivery;
+      yield* delivery.flush;
+      let health = (yield* delivery.health).exporters["lifecycle-failure"];
+      expect(health?.flushFailures).toBe(1);
+      expect(health?.flushTimeouts).toBe(0);
+      expect(health?.shutdownFailures).toBe(0);
+      yield* delivery.shutdown;
+      health = (yield* delivery.health).exporters["lifecycle-failure"];
+      expect(health?.shutdownFailures).toBe(1);
+      expect(health?.shutdownTimeouts).toBe(0);
+    }).pipe(Effect.provide(deliveryLayer(options([exporter]))));
+  });
+
+  it.effect("counts flush and shutdown timeouts independently", () => {
+    const flushHung: SpanExporter = {
+      name: "flush-timeout",
+      export: () => Effect.void,
+      flush: Effect.never,
+      shutdown: Effect.void,
+    };
+    const shutdownHung: SpanExporter = {
+      name: "shutdown-timeout",
+      export: () => Effect.void,
+      flush: Effect.void,
+      shutdown: Effect.never,
+    };
+    return Effect.gen(function* () {
+      const delivery = yield* Delivery;
+      const flushing = yield* delivery.flush.pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 millis");
+      yield* Fiber.join(flushing);
+      let health = yield* delivery.health;
+      expect(health.exporters["flush-timeout"]?.flushTimeouts).toBe(1);
+      expect(health.exporters["flush-timeout"]?.flushFailures).toBe(0);
+      const shuttingDown = yield* delivery.shutdown.pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 millis");
+      yield* Fiber.join(shuttingDown);
+      health = yield* delivery.health;
+      expect(health.exporters["shutdown-timeout"]?.shutdownTimeouts).toBe(1);
+      expect(health.exporters["shutdown-timeout"]?.shutdownFailures).toBe(0);
+    }).pipe(
+      Effect.provide(
+        deliveryLayer(
+          options([flushHung, shutdownHung], {
+            attemptTimeout: "10 millis",
+            shutdownTimeout: "100 millis",
+          }),
+        ),
       ),
     );
   });

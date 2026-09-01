@@ -19,7 +19,16 @@ when `successRatio` is zero. Only normalized integer statuses from 100 through 5
 `deliveryLayer` uses a bounded queue and non-blocking offers. Choose `drop-newest` when preserving the
 oldest accepted evidence matters, or `drop-oldest` when recent evidence is more useful. Configure a
 finite batch size/age, retry count and backoff, attempt timeout, concurrency, and final flush timeout.
-Retry state is bounded, and one failed or hung exporter is isolated from the others.
+Retry state is bounded, and one failed or hung exporter is isolated from the others. Configure each
+exporter's circuit with a positive failure threshold, finite open duration, and finite half-open probe
+timeout. The circuit moves from closed through retrying to open, permits one probe after the cooldown,
+and closes only after that probe succeeds. A failed probe reopens it.
+
+A timed-out exporter fiber is interrupted and observed before any probe is allowed. If third-party
+exporter code remains in an uninterruptible region, the circuit admits no further operation for that
+exporter, preventing repeated fiber leaks while healthy exporters continue. In-process Effect code
+cannot forcibly terminate such a fiber; use process or worker isolation when stronger containment is
+required.
 
 Capacity is an operational budget, not a reliability guarantee. Monitor the exact nested
 `Delivery.health` pipeline and per-exporter counters rather than deriving unique-span totals from

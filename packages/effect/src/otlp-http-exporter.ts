@@ -184,6 +184,23 @@ function mapSpan(span: FlowSpan): OtlpSpan {
       ? {}
       : { "wide_effect.interaction.id": span.interactionId }),
     ...(span.requestId === undefined ? {} : { "wide_effect.request.id": span.requestId }),
+    ...(span.failure === undefined
+      ? {}
+      : {
+          "wide_effect.failure.type": span.failure.type,
+          ...(span.failure.category === undefined
+            ? {}
+            : { "wide_effect.failure.category": span.failure.category }),
+          ...(span.failure.code === undefined
+            ? {}
+            : { "wide_effect.failure.code": span.failure.code }),
+          ...(span.failure.retryable === undefined
+            ? {}
+            : { "wide_effect.failure.retryable": span.failure.retryable }),
+          ...(span.failure.summary === undefined
+            ? {}
+            : { "wide_effect.failure.summary": span.failure.summary }),
+        }),
   };
   return {
     traceId: span.traceId,

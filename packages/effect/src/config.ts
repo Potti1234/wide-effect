@@ -1,5 +1,6 @@
 import { ServiceMetadata, type AttributePolicy } from "@wide-effect/core";
 import { Context, Effect, Layer, Schema } from "effect";
+import { failureAttributeKeys } from "./failure.js";
 
 export interface ObservabilityConfigService {
   readonly service: ServiceMetadata;
@@ -56,12 +57,17 @@ const defaultAttributePolicy: AttributePolicy = {
 };
 
 function withSanitizedPath(policy: AttributePolicy, enabled: boolean): AttributePolicy {
-  if (!enabled) return policy;
   const deniedKeys = new Set(policy.deniedKeys);
-  deniedKeys.delete("url.path");
+  const reservedKeys = Object.values(failureAttributeKeys);
+  for (const key of reservedKeys) deniedKeys.delete(key);
+  if (enabled) deniedKeys.delete("url.path");
   return {
     ...policy,
-    allowedKeys: new Set([...(policy.allowedKeys ?? []), "url.path"]),
+    allowedKeys: new Set([
+      ...(policy.allowedKeys ?? []),
+      ...reservedKeys,
+      ...(enabled ? ["url.path"] : []),
+    ]),
     deniedKeys,
   };
 }

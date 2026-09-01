@@ -25,6 +25,24 @@ export const SpanKind = Schema.Literals(["internal", "server", "client", "produc
 export type SpanKind = typeof SpanKind.Type;
 export const SpanOutcome = Schema.Literals(["success", "failure", "defect", "interrupted"]);
 export type SpanOutcome = typeof SpanOutcome.Type;
+const FailureMachineName = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[A-Za-z][A-Za-z0-9_.:-]*$/),
+);
+const FailureText = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(256),
+  Schema.isPattern(/^[^\r\n\u2028\u2029]*$/),
+);
+export const FailureSummary = Schema.Struct({
+  type: Schema.Literals(["typed", "defect", "interruption", "http"]),
+  category: Schema.optionalKey(FailureMachineName),
+  code: Schema.optionalKey(FailureMachineName),
+  retryable: Schema.optionalKey(Schema.Boolean),
+  summary: Schema.optionalKey(FailureText),
+});
+export type FailureSummary = typeof FailureSummary.Type;
 export const LogLevel = Schema.Literals(["trace", "debug", "info", "warn", "error", "fatal"]);
 export type LogLevel = typeof LogLevel.Type;
 export const SpanEvent = Schema.Struct({
@@ -45,6 +63,7 @@ const FlowSpanFields = Schema.Struct({
   operation: Text,
   kind: SpanKind,
   outcome: SpanOutcome,
+  failure: Schema.optionalKey(FailureSummary),
   startTime: CanonicalUtcTimestamp,
   endTime: CanonicalUtcTimestamp,
   durationMs: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),

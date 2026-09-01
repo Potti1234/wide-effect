@@ -24,6 +24,12 @@ programmatic `sanitizeHttpPath` strategy to `configLayer`; this callback must re
 route-like value and cannot be supplied through external decoded configuration. Exact denied keys
 take precedence over both exact and prefix allow rules.
 
+Failed spans contain bounded structured `failure` evidence. The tracer derives only the reason type
+and may copy a valid own data `_tag` from a typed failure as its code; it never reads error messages,
+stacks, defects, getters, or pretty causes. Applications can add a pre-sanitized category, code,
+retryability flag, and single-line summary with `annotateFailure`. Invalid enrichment is ignored and
+cannot change the business exit.
+
 Foldkit capture never reads or exports the Model. It records approved Message/Command metadata in a
 count-, byte-, and age-bounded timeline. Diagnostic upload endpoints remain consumer-owned and must
 authenticate the caller, authorize trace access, enforce retention, decode the bundle, and apply a

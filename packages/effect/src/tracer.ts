@@ -4,6 +4,7 @@ import {
   SpanId,
   TraceId,
   type FlowSpan,
+  type FailureSummary,
   type LogLevel as CanonicalLogLevel,
   type SafeAttributes,
   type SpanId as SpanIdType,
@@ -13,6 +14,7 @@ import {
 } from "@wide-effect/core";
 import { Cause, Context, Effect, Exit, Layer, Option, Schema, Tracer } from "effect";
 import { ObservabilityConfig } from "./config.js";
+import { readFailureAnnotation } from "./failure.js";
 import { SpanIdGenerator } from "./ids.js";
 import { sanitizeSpanEvent } from "./log-event.js";
 import { CompletedSpanSink, type CompletedSpanSinkService } from "./sink.js";
@@ -120,6 +122,8 @@ class WideSpan implements Tracer.Span {
     exit: Exit.Exit<unknown, unknown>,
   ): FlowSpan {
     const rawAttributes = Object.fromEntries(this.attributes);
+    const explicitFailure = readFailureAnnotation(rawAttributes);
+    const failure = failureSummary(exit, explicitFailure);
     rawAttributes["effect.sampled"] = this.sampled;
     if (this.links.length > 0) {
       rawAttributes["effect.links"] = this.links.map(({ attributes, span }) => ({
@@ -140,6 +144,7 @@ class WideSpan implements Tracer.Span {
       operation: safeName(this.name, "unnamed-span"),
       kind: this.kind,
       outcome: classifyOutcome(exit),
+      ...(failure === undefined ? {} : { failure }),
       startTime: timestamp(startTimeNanos),
       endTime: timestamp(endTimeNanos),
       durationMs: durationMillis(startTimeNanos, endTimeNanos),
@@ -155,6 +160,42 @@ class WideSpan implements Tracer.Span {
         .slice(0, 256)
         .map((event) => normalizeEvent(event, this.config.attributePolicy)),
     };
+  }
+}
+
+function failureSummary(
+  exit: Exit.Exit<unknown, unknown>,
+  explicit: Omit<FailureSummary, "type">,
+): FailureSummary | undefined {
+  if (Exit.isSuccess(exit)) return undefined;
+  const type = exit.cause.reasons.some(Cause.isDieReason)
+    ? "defect"
+    : exit.cause.reasons.some(Cause.isInterruptReason)
+      ? "interruption"
+      : "typed";
+  const automaticCode = type === "typed" ? taggedFailureCode(exit.cause) : undefined;
+  return {
+    type,
+    ...(automaticCode === undefined ? {} : { code: automaticCode }),
+    ...explicit,
+  };
+}
+
+function taggedFailureCode(cause: Cause.Cause<unknown>): string | undefined {
+  const failure = cause.reasons.find(Cause.isFailReason);
+  if (failure === undefined || failure.error === null || typeof failure.error !== "object")
+    return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(failure.error, "_tag");
+    if (
+      descriptor === undefined ||
+      !("value" in descriptor) ||
+      typeof descriptor.value !== "string"
+    )
+      return undefined;
+    return /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(descriptor.value) ? descriptor.value : undefined;
+  } catch {
+    return undefined;
   }
 }
 

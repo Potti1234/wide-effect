@@ -30,6 +30,13 @@ const span: FlowSpan = {
   operation: "Checkout.submit",
   kind: "server",
   outcome: "failure",
+  failure: {
+    type: "typed",
+    category: "payment",
+    code: "payment.declined",
+    retryable: false,
+    summary: "payment provider declined the request",
+  },
   startTime: "2026-08-22T20:00:00.000Z",
   endTime: "2026-08-22T20:00:00.125Z",
   durationMs: 125,
@@ -116,6 +123,13 @@ describe("OTLP/HTTP JSON exporter", () => {
                       keyValue("wide_effect.duration_ms", { doubleValue: 125 }),
                       keyValue("wide_effect.interaction.id", { stringValue: "interaction-1" }),
                       keyValue("wide_effect.request.id", { stringValue: "request-1" }),
+                      keyValue("wide_effect.failure.type", { stringValue: "typed" }),
+                      keyValue("wide_effect.failure.category", { stringValue: "payment" }),
+                      keyValue("wide_effect.failure.code", { stringValue: "payment.declined" }),
+                      keyValue("wide_effect.failure.retryable", { boolValue: false }),
+                      keyValue("wide_effect.failure.summary", {
+                        stringValue: "payment provider declined the request",
+                      }),
                     ],
                     events: [
                       {

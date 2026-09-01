@@ -11,6 +11,7 @@ import { describe, it } from "@effect/vitest";
 import {
   CompletedSpanSink,
   InMemoryCompletedSpans,
+  annotateFailure,
   annotate,
   configLayer,
   event,
@@ -70,6 +71,58 @@ describe("wide Effect tracer", () => {
     }).pipe(Effect.provide(makeTestLayer())),
   );
 
+  it.effect("captures only safe structured failure evidence", () =>
+    Effect.gen(function* () {
+      const sentinel = "secret-never-export-failure";
+      let messageReads = 0;
+      const typed = Object.defineProperty({ _tag: "Database.Unavailable" }, "message", {
+        enumerable: true,
+        get: () => {
+          messageReads++;
+          return sentinel;
+        },
+      });
+      yield* Effect.gen(function* () {
+        yield* annotateFailure({
+          category: "dependency",
+          code: "database.timeout",
+          retryable: true,
+          summary: "database did not respond in time",
+        });
+        return yield* Effect.fail(typed);
+      }).pipe(Effect.withSpan("enriched-failure"), Effect.exit);
+      yield* Effect.die(
+        new Proxy(
+          {},
+          {
+            ownKeys: () => {
+              throw new Error(sentinel);
+            },
+          },
+        ),
+      ).pipe(Effect.withSpan("hostile-defect"), Effect.exit);
+      yield* Effect.gen(function* () {
+        yield* annotateFailure({ summary: `invalid\n${sentinel}` });
+        return yield* Effect.fail("plain typed failure");
+      }).pipe(Effect.withSpan("invalid-summary"), Effect.exit);
+      yield* annotateFailure({ summary: "safe outside a span" });
+
+      const spans = yield* InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
+      expect(operation(spans, "enriched-failure").failure).toEqual({
+        type: "typed",
+        category: "dependency",
+        code: "database.timeout",
+        retryable: true,
+        summary: "database did not respond in time",
+      });
+      expect(operation(spans, "hostile-defect").failure).toEqual({ type: "defect" });
+      expect(operation(spans, "invalid-summary").failure).toEqual({ type: "typed" });
+      expect(messageReads).toBe(0);
+      expect(JSON.stringify(spans)).not.toContain(sentinel);
+      expect(JSON.stringify(spans)).not.toContain("wide.failure");
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
   it.effect("classifies interruption", () =>
     Effect.gen(function* () {
       const fiber = yield* Effect.never.pipe(Effect.withSpan("interrupted"), Effect.forkChild);
@@ -77,6 +130,7 @@ describe("wide Effect tracer", () => {
       yield* Fiber.interrupt(fiber);
       const spans = yield* InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
       expect(operation(spans, "interrupted").outcome).toBe("interrupted");
+      expect(operation(spans, "interrupted").failure).toEqual({ type: "interruption" });
     }).pipe(Effect.provide(makeTestLayer())),
   );
 

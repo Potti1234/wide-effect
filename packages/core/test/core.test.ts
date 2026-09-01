@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   FlowSpan,
+  FailureSummary,
   DiagnosticBundle,
   MAX_DIAGNOSTIC_BUNDLE_BYTES,
   MAX_FLOW_SPAN_BYTES,
@@ -70,6 +71,27 @@ describe("boundary contracts", () => {
       onExcessProperty: "error",
     })(fixture);
     expect(Schema.encodeSync(FlowSpan)(decoded)).toEqual(fixture);
+    const enriched = Schema.decodeUnknownSync(FlowSpan, { onExcessProperty: "error" })({
+      ...fixture,
+      outcome: "failure",
+      failure: {
+        type: "typed",
+        category: "dependency",
+        code: "UserRepo.NotFound",
+        retryable: false,
+        summary: "user record was not found",
+      },
+    });
+    expect(Schema.decodeUnknownSync(FailureSummary)(enriched.failure)).toMatchObject({
+      type: "typed",
+      code: "UserRepo.NotFound",
+    });
+    expect(() =>
+      Schema.decodeUnknownSync(FailureSummary)({
+        type: "typed",
+        summary: "unsafe\nsecond line",
+      }),
+    ).toThrow();
     expect(() =>
       Schema.decodeUnknownSync(FlowSpan, { onExcessProperty: "error" })({
         ...fixture,

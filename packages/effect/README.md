@@ -12,6 +12,10 @@ The tracer replaces unsafe or dynamic log messages with `effect.log` and never p
 pretty-printed cause. A configured human logger still receives the original application message and
 therefore remains an application-owned output boundary.
 
+Use `annotateFailure` before a typed failure when automated triage needs an explicitly sanitized
+category, code, retryability flag, or short single-line summary. The completed span derives the
+failure type from the Effect `Exit`; raw failure messages, causes, defects, and stacks are not read.
+
 The main entry point is browser-safe and exports the exporter contract, fan-out composition,
 in-memory exporter, and direct JSON console exporter. Import the append-only NDJSON and OTLP/HTTP JSON
 adapters from `@wide-effect/effect/server`. NDJSON requires Effect's `FileSystem` service; OTLP

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   FlowSpan,
   FailureSummary,
+  CaptureLimits,
   DiagnosticBundle,
   MAX_DIAGNOSTIC_BUNDLE_BYTES,
   MAX_FLOW_SPAN_BYTES,
@@ -104,6 +105,18 @@ describe("boundary contracts", () => {
         }),
       ).toThrow();
     }
+    expect(() =>
+      Schema.decodeUnknownSync(CaptureLimits)({
+        maxAttributeCount: 1,
+        maxAttributeBytes: 400_000,
+        maxEventCount: 1,
+        maxEventBytes: 400_000,
+        maxEventAttributeCount: 1,
+        maxEventAttributeBytes: 1,
+        maxLinkCount: 1,
+        maxLinkBytes: 400_000,
+      }),
+    ).toThrow();
     const enriched = Schema.decodeUnknownSync(FlowSpan, { onExcessProperty: "error" })({
       ...fixture,
       outcome: "failure",

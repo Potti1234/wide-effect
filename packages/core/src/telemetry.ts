@@ -12,6 +12,27 @@ export const CanonicalUtcTimestamp = Schema.String.check(
   ),
 );
 export const MAX_FLOW_SPAN_BYTES = 1_048_576;
+const CaptureCount = Schema.Finite.check(
+  Schema.makeFilter((value) => Number.isInteger(value) || "capture limit must be an integer"),
+  Schema.isGreaterThanOrEqualTo(0),
+);
+export const CaptureLimits = Schema.Struct({
+  maxAttributeCount: CaptureCount,
+  maxAttributeBytes: CaptureCount,
+  maxEventCount: CaptureCount.check(Schema.isLessThanOrEqualTo(256)),
+  maxEventBytes: CaptureCount,
+  maxEventAttributeCount: CaptureCount,
+  maxEventAttributeBytes: CaptureCount,
+  maxLinkCount: CaptureCount,
+  maxLinkBytes: CaptureCount,
+}).check(
+  Schema.makeFilter(
+    (limits) =>
+      limits.maxAttributeBytes + limits.maxEventBytes + limits.maxLinkBytes <= 900_000 ||
+      "combined live capture byte budget exceeds 900000 bytes",
+  ),
+);
+export type CaptureLimits = typeof CaptureLimits.Type;
 /** Allows sub-millisecond tracer durations beside millisecond UTC timestamps. */
 export const FLOW_SPAN_DURATION_TOLERANCE_MS = 1;
 export const ServiceMetadata = Schema.Struct({

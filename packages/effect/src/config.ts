@@ -1,8 +1,10 @@
 import {
   HttpOutcomePolicy,
+  CaptureLimits,
   ServiceMetadata,
   type AttributePolicy,
   type HttpOutcomePolicy as HttpOutcomePolicyType,
+  type CaptureLimits as CaptureLimitsType,
 } from "@wide-effect/core";
 import { Context, Effect, Layer, Schema } from "effect";
 import { failureAttributeKeys } from "./failure.js";
@@ -13,6 +15,7 @@ export interface ObservabilityConfigService {
   readonly attributePolicy: AttributePolicy;
   readonly sanitizeHttpPath?: ((path: string) => string) | undefined;
   readonly httpOutcomePolicy: HttpOutcomePolicyType;
+  readonly captureLimits: CaptureLimitsType;
 }
 
 export class ObservabilityConfig extends Context.Service<
@@ -26,6 +29,7 @@ export interface ObservabilityOptions {
   /** Programmatic opt-in for recording a sanitized `url.path`; never decoded from external data. */
   readonly sanitizeHttpPath?: ((path: string) => string) | undefined;
   readonly httpOutcomePolicy?: HttpOutcomePolicyType | undefined;
+  readonly captureLimits?: CaptureLimitsType | undefined;
 }
 
 export const configLayer = (options: ObservabilityOptions) =>
@@ -36,11 +40,15 @@ export const configLayer = (options: ObservabilityOptions) =>
       httpOutcomePolicy: Schema.decodeUnknownEffect(HttpOutcomePolicy)(
         options.httpOutcomePolicy ?? defaultHttpOutcomePolicy,
       ),
+      captureLimits: Schema.decodeUnknownEffect(CaptureLimits)(
+        options.captureLimits ?? defaultCaptureLimits,
+      ),
     }).pipe(
-      Effect.map(({ service, httpOutcomePolicy }) =>
+      Effect.map(({ service, httpOutcomePolicy, captureLimits }) =>
         ObservabilityConfig.of({
           service,
           httpOutcomePolicy,
+          captureLimits,
           attributePolicy: withSanitizedPath(
             options.attributePolicy ?? defaultAttributePolicy,
             options.sanitizeHttpPath !== undefined,
@@ -75,11 +83,25 @@ const defaultHttpOutcomePolicy: HttpOutcomePolicyType = {
   clientErrorRanges: [{ minimum: 500, maximum: 599 }],
 };
 
+const defaultCaptureLimits: CaptureLimitsType = {
+  maxAttributeCount: 128,
+  maxAttributeBytes: 65_536,
+  maxEventCount: 256,
+  maxEventBytes: 262_144,
+  maxEventAttributeCount: 32,
+  maxEventAttributeBytes: 8_192,
+  maxLinkCount: 16,
+  maxLinkBytes: 131_072,
+};
+
 function withSanitizedPath(policy: AttributePolicy, enabled: boolean): AttributePolicy {
   const deniedKeys = new Set(policy.deniedKeys);
   const reservedKeys = [
     ...Object.values(failureAttributeKeys),
     ...Object.values(correlationAttributeKeys),
+    "wide.dropped.attributes",
+    "wide.dropped.events",
+    "wide.dropped.links",
   ];
   for (const key of reservedKeys) deniedKeys.delete(key);
   if (enabled) deniedKeys.delete("url.path");

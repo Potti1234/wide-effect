@@ -40,3 +40,7 @@ Service metadata may additionally include bounded `commitHash`, `region`, and `i
 Supply them through decoded runtime configuration, not per-request annotations. The OTLP adapter maps
 these to resource attributes; instance identity remains span/resource evidence and must not become a
 metric label.
+
+`captureLimits` bounds each live span before completion: attribute count/bytes, event count/bytes,
+per-event attributes/bytes, and link count/bytes. The decoded combined byte budget cannot exceed
+900,000 bytes, leaving envelope and drop-counter headroom below the 1 MiB `FlowSpan` ceiling.

@@ -1,4 +1,9 @@
-import { normalizeAttributes, type AttributePolicy, type SafeAttributes } from "@wide-effect/core";
+import {
+  normalizeAttributes,
+  type AttributePolicy,
+  type NormalizationLimits,
+  type SafeAttributes,
+} from "@wide-effect/core";
 
 const semanticLogName = /^[a-z0-9](?:[a-z0-9_-]*)(?:\.[a-z0-9](?:[a-z0-9_-]*))*$/;
 const maxSemanticLogNameLength = 128;
@@ -17,12 +22,13 @@ export function sanitizeSpanEvent(
   name: string,
   attributes: Record<string, unknown>,
   policy: AttributePolicy,
+  limits?: NormalizationLimits,
 ): SanitizedSpanEvent {
   const logEvent = isEffectLogEvent(attributes);
   const filtered = logEvent ? withoutCause(attributes) : attributes;
   return {
     name: logEvent ? safeLogName(name) : name,
-    attributes: normalizeAttributes(filtered, policy),
+    attributes: normalizeAttributes(filtered, policy, limits),
   };
 }
 

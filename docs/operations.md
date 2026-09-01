@@ -14,6 +14,13 @@ capacity times the maximum encoded `FlowSpan`, decision-cache entries, and small
 `openSegments`, `segmentDrops`, `lateSpans`, overflow, and dropped-span totals without attaching trace
 or segment IDs as metric labels.
 
+The default active-span capture budget is 128 attributes/65,536 bytes, 256 events/262,144 cumulative
+bytes with at most 32 attributes and 8,192 bytes per event, and 16 links/131,072 bytes. This is at
+most 458,752 accepted telemetry bytes plus bounded object/array overhead per active span. Size
+application concurrency so that this worst case and segment staging fit the process memory budget.
+Rejected live entries increment `wide.dropped.attributes`, `wide.dropped.events`, or
+`wide.dropped.links` on completion; these counters are reserved low-cardinality fields.
+
 For incident lookup, store or return trace/support IDs separately from authentication. Persist the
 versioned `FlowSpan` envelope only after decoding it, index consumer-owned lookup fields, and define
 retention locally. The NDJSON exporter is append-only but does not promise `fsync`; the OTLP adapter is

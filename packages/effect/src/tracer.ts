@@ -1,6 +1,7 @@
 import {
   normalizeAttributes,
   normalizeValue,
+  defaultNormalizationLimits,
   SegmentId,
   SpanId,
   TraceId,
@@ -8,6 +9,7 @@ import {
   type FailureSummary,
   type LogLevel as CanonicalLogLevel,
   type SafeAttributes,
+  type SafeValue,
   type SegmentId as SegmentIdType,
   type SpanId as SpanIdType,
   type SpanEvent,
@@ -44,11 +46,17 @@ class WideSpan implements Tracer.Span {
   readonly annotations: Context.Context<never>;
   readonly sampled: boolean;
   readonly kind: Tracer.SpanKind;
-  readonly attributes = new Map<string, unknown>();
-  readonly links: Array<Tracer.SpanLink>;
+  readonly attributes = new Map<string, SafeValue>();
+  readonly links: Array<Tracer.SpanLink> = [];
   readonly events: Array<RawEvent> = [];
   status: Tracer.SpanStatus;
   private ended = false;
+  private attributeBytes = 0;
+  private eventBytes = 0;
+  private linkBytes = 0;
+  private droppedAttributes = 0;
+  private droppedEvents = 0;
+  private droppedLinks = 0;
 
   constructor(
     options: Parameters<Tracer.Tracer["span"]>[0],
@@ -61,7 +69,6 @@ class WideSpan implements Tracer.Span {
     this.annotations = options.annotations;
     this.sampled = options.sampled;
     this.kind = options.kind;
-    this.links = safeLinks(options.links);
     this.spanId = ids.nextSpanId();
     this.traceId = Option.match(this.parent, {
       onNone: ids.nextTraceId,
@@ -72,13 +79,33 @@ class WideSpan implements Tracer.Span {
         ? this.parent.value.segmentId
         : Schema.decodeUnknownSync(SegmentId)(this.spanId);
     this.status = { _tag: "Started", startTime: options.startTime };
+    this.addLinks(options.links);
   }
 
   attribute(key: string, value: unknown): void {
     if (this.ended) return;
     const candidate = this.sanitizeAttributeValue(key, value);
-    const sanitized = normalizeAttributes({ [key]: candidate }, this.config.attributePolicy);
-    if (Object.hasOwn(sanitized, key)) this.attributes.set(key, sanitized[key]);
+    const sanitized = normalizeAttributes({ [key]: candidate }, this.config.attributePolicy, {
+      ...defaultNormalizationLimits,
+      maxEntries: defaultNormalizationLimits.maxEntries,
+      maxBytes: Math.max(2, this.config.captureLimits.maxAttributeBytes),
+    });
+    if (!Object.hasOwn(sanitized, key)) return;
+    const normalized = sanitized[key];
+    if (normalized === undefined) return;
+    const previous = this.attributes.get(key);
+    const previousBytes = previous === undefined ? 0 : attributeEntryBytes(key, previous);
+    const nextBytes = attributeEntryBytes(key, normalized);
+    if (
+      (previous === undefined &&
+        this.attributes.size >= this.config.captureLimits.maxAttributeCount) ||
+      this.attributeBytes - previousBytes + nextBytes > this.config.captureLimits.maxAttributeBytes
+    ) {
+      this.droppedAttributes++;
+      return;
+    }
+    this.attributes.set(key, normalized);
+    this.attributeBytes = this.attributeBytes - previousBytes + nextBytes;
   }
 
   private sanitizeAttributeValue(key: string, value: unknown): unknown {
@@ -97,18 +124,63 @@ class WideSpan implements Tracer.Span {
 
   event(name: string, startTime: bigint, attributes: Record<string, unknown> = {}): void {
     if (!this.ended) {
-      const sanitized = sanitizeSpanEvent(name, attributes, this.config.attributePolicy);
+      const sanitized = sanitizeSpanEvent(name, attributes, this.config.attributePolicy, {
+        ...defaultNormalizationLimits,
+        maxEntries: Math.max(
+          this.config.captureLimits.maxEventAttributeCount,
+          this.config.captureLimits.maxEventAttributeCount * 4,
+        ),
+        maxBytes: Math.max(2, this.config.captureLimits.maxEventAttributeBytes),
+      });
+      const boundedAttributes = Object.fromEntries(
+        Object.entries(sanitized.attributes).slice(
+          0,
+          this.config.captureLimits.maxEventAttributeCount,
+        ),
+      );
+      const safeEventName = safeName(sanitized.name, "event");
+      const bytes = encodedBytes({ name: safeEventName, attributes: boundedAttributes });
+      if (
+        this.events.length >= this.config.captureLimits.maxEventCount ||
+        this.eventBytes + bytes > this.config.captureLimits.maxEventBytes
+      ) {
+        this.droppedEvents++;
+        return;
+      }
       this.events.push({
-        name: sanitized.name,
+        name: safeEventName,
         startTime,
-        attributes: sanitized.attributes,
+        attributes: boundedAttributes,
         sequence: this.events.length,
       });
+      this.eventBytes += bytes;
     }
   }
 
   addLinks(links: ReadonlyArray<Tracer.SpanLink>): void {
-    if (!this.ended) this.links.push(...safeLinks(links));
+    if (this.ended) return;
+    for (let index = 0; index < links.length; index++) {
+      if (this.links.length >= this.config.captureLimits.maxLinkCount) {
+        this.droppedLinks += links.length - index;
+        return;
+      }
+      const normalized = safeLink(links[index]);
+      if (normalized === undefined) {
+        this.droppedLinks++;
+        continue;
+      }
+      const bytes = encodedBytes({
+        traceId: normalized.span.traceId,
+        spanId: normalized.span.spanId,
+        attributes: normalized.attributes,
+      });
+      if (this.linkBytes + bytes > this.config.captureLimits.maxLinkBytes) {
+        this.droppedLinks += links.length - index;
+        return;
+      }
+      this.links.push(normalized);
+      this.linkBytes += bytes;
+    }
   }
 
   end(endTime: bigint, exit: Exit.Exit<unknown, unknown>): void {
@@ -135,13 +207,24 @@ class WideSpan implements Tracer.Span {
     const httpStatus = readHttpStatus(rawAttributes);
     const outcome = classifyOutcome(exit, this.kind, httpStatus, this.config.httpOutcomePolicy);
     const failure = failureSummary(exit, outcome, httpStatus, explicitFailure);
+    if (this.droppedAttributes > 0)
+      rawAttributes["wide.dropped.attributes"] = this.droppedAttributes;
+    if (this.droppedEvents > 0) rawAttributes["wide.dropped.events"] = this.droppedEvents;
+    if (this.droppedLinks > 0) rawAttributes["wide.dropped.links"] = this.droppedLinks;
     rawAttributes["effect.sampled"] = this.sampled;
     if (this.links.length > 0) {
-      rawAttributes["effect.links"] = this.links.map(({ attributes, span }) => ({
-        traceId: span.traceId,
-        spanId: span.spanId,
-        attributes,
-      }));
+      rawAttributes["effect.links"] = normalizeValue(
+        this.links.map(({ attributes, span }) => ({
+          traceId: span.traceId,
+          spanId: span.spanId,
+          attributes,
+        })),
+        {
+          ...defaultNormalizationLimits,
+          maxEntries: this.config.captureLimits.maxLinkCount * 8,
+          maxBytes: Math.max(2, this.config.captureLimits.maxLinkBytes),
+        },
+      );
     }
     const parent = Option.getOrUndefined(this.parent);
     return {
@@ -161,7 +244,16 @@ class WideSpan implements Tracer.Span {
       startTime: timestamp(startTimeNanos),
       endTime: timestamp(endTimeNanos),
       durationMs: durationMillis(startTimeNanos, endTimeNanos),
-      attributes: normalizeAttributes(rawAttributes, this.config.attributePolicy),
+      attributes: normalizeAttributes(rawAttributes, this.config.attributePolicy, {
+        ...defaultNormalizationLimits,
+        maxEntries: 10_000,
+        maxBytes: Math.max(
+          2,
+          this.config.captureLimits.maxAttributeBytes +
+            this.config.captureLimits.maxLinkBytes +
+            4_096,
+        ),
+      }),
       events: this.events
         .toSorted((left, right) =>
           left.startTime === right.startTime
@@ -170,8 +262,7 @@ class WideSpan implements Tracer.Span {
               ? -1
               : 1,
         )
-        .slice(0, 256)
-        .map((event) => normalizeEvent(event, this.config.attributePolicy)),
+        .map(normalizeEvent),
     };
   }
 }
@@ -239,23 +330,20 @@ function snapshotParent(parent: Option.Option<Tracer.AnySpan>): Option.Option<Tr
   }
 }
 
-function safeLinks(links: ReadonlyArray<Tracer.SpanLink>): Array<Tracer.SpanLink> {
-  const output: Array<Tracer.SpanLink> = [];
+function safeLink(link: Tracer.SpanLink | undefined): Tracer.SpanLink | undefined {
+  if (link === undefined) return undefined;
   try {
-    for (const link of links.slice(0, 128)) {
-      const parent = snapshotParent(Option.some(link.span));
-      if (Option.isSome(parent))
-        output.push({
-          span: parent.value,
-          // Link attributes are nested under the policy-approved `effect.links`
-          // container, so retain every safe key while still dropping secrets.
-          attributes: normalizeAttributes(link.attributes, { allowedPrefixes: [""] }),
-        });
-    }
+    const parent = snapshotParent(Option.some(link.span));
+    if (Option.isNone(parent)) return undefined;
+    return {
+      span: parent.value,
+      // Link attributes are nested under the policy-approved `effect.links`
+      // container, so retain every safe key while still dropping secrets.
+      attributes: normalizeAttributes(link.attributes, { allowedPrefixes: [""] }),
+    };
   } catch {
-    return output;
+    return undefined;
   }
-  return output;
 }
 
 interface RawEvent {
@@ -265,16 +353,13 @@ interface RawEvent {
   readonly sequence: number;
 }
 
-function normalizeEvent(
-  event: RawEvent,
-  policy: ObservabilityConfig["Service"]["attributePolicy"],
-): SpanEvent {
+function normalizeEvent(event: RawEvent): SpanEvent {
   const level = readLogLevel(event.attributes["effect.logLevel"]);
   return {
-    name: safeName(event.name, "event"),
+    name: event.name,
     timestamp: timestamp(event.startTime),
     ...(level === undefined ? {} : { level }),
-    attributes: normalizeAttributes(event.attributes, policy),
+    attributes: event.attributes,
   };
 }
 
@@ -344,6 +429,14 @@ function safeName(value: string, fallback: string): string {
     .trim()
     .slice(0, 256);
   return normalized || fallback;
+}
+
+function attributeEntryBytes(key: string, value: SafeValue): number {
+  return encodedBytes({ [key]: value });
+}
+
+function encodedBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
 export type { SafeAttributes };

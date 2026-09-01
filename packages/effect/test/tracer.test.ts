@@ -1,5 +1,6 @@
 import {
   FlowSpan,
+  type CaptureLimits,
   parseInteractionId,
   parseRequestId,
   parseSpanId,
@@ -32,10 +33,11 @@ const service = { name: "test-service", version: "1", environment: "test" } as c
 const makeTestLayer = (
   humanLogger?: Logger.Logger<unknown, void>,
   allowedPrefixes: ReadonlyArray<string> = ["test.", "effect."],
+  captureLimits?: CaptureLimits,
 ) => {
   let next = 1;
   const dependencies = Layer.mergeAll(
-    configLayer({ service, attributePolicy: { allowedPrefixes } }),
+    configLayer({ service, attributePolicy: { allowedPrefixes }, captureLimits }),
     idGeneratorLayer({
       nextTraceId: () => parseTraceId((next++).toString(16).padStart(32, "0")),
       nextSpanId: () => parseSpanId((next++).toString(16).padStart(16, "0")),
@@ -458,6 +460,83 @@ describe("wide Effect tracer", () => {
       expect((yield* store.spans).map((span) => span.operation)).toEqual(["two", "three"]);
       expect(yield* store.dropped).toBe(1);
     }).pipe(Effect.provide(live));
+  });
+
+  it.effect("bounds attributes, events, and links while a span is still live", () => {
+    const limits: CaptureLimits = {
+      maxAttributeCount: 2,
+      maxAttributeBytes: 256,
+      maxEventCount: 3,
+      maxEventBytes: 1_024,
+      maxEventAttributeCount: 2,
+      maxEventAttributeBytes: 128,
+      maxLinkCount: 2,
+      maxLinkBytes: 1_024,
+    };
+    return Effect.gen(function* () {
+      const tracer = yield* Effect.tracer;
+      const span = tracer.span({
+        name: "live-bounded",
+        parent: Option.none(),
+        annotations: Context.empty(),
+        links: [],
+        startTime: 0n,
+        kind: "internal",
+        root: true,
+        sampled: true,
+      });
+      let proxyReads = 0;
+      span.attribute("test.replace", "x".repeat(100));
+      span.attribute("test.replace", "small");
+      span.attribute("test.second", "accepted");
+      span.attribute("test.third", "dropped");
+      span.attribute(
+        "test.hostile",
+        new Proxy(
+          {},
+          {
+            ownKeys: () => {
+              proxyReads++;
+              throw new Error("hostile");
+            },
+          },
+        ),
+      );
+      for (let index = 0; index < 10_000; index++) {
+        span.event("bounded.event", BigInt(index), {
+          "test.index": index,
+          "test.extra": "kept",
+          "test.third": "bounded",
+        });
+      }
+      const linked = Tracer.externalSpan({
+        traceId: parseTraceId("c".repeat(32)),
+        spanId: parseSpanId("d".repeat(16)),
+      });
+      span.addLinks(Array.from({ length: 10_000 }, () => ({ span: linked, attributes: {} })));
+
+      const liveEvents = Object.getOwnPropertyDescriptor(span, "events")?.value;
+      const liveLinks = Object.getOwnPropertyDescriptor(span, "links")?.value;
+      expect(Array.isArray(liveEvents) ? liveEvents.length : -1).toBe(3);
+      expect(Array.isArray(liveLinks) ? liveLinks.length : -1).toBe(2);
+      expect(proxyReads).toBe(1);
+
+      span.end(10_000_000n, Exit.succeed(undefined));
+      const spans = yield* InMemoryCompletedSpans.pipe(Effect.flatMap((store) => store.spans));
+      const completed = operation(spans, "live-bounded");
+      expect(completed.events).toHaveLength(3);
+      expect(completed.events[0]?.attributes).toEqual({
+        "test.extra": "kept",
+        "test.index": 0,
+      });
+      expect(completed.attributes["test.replace"]).toBe("small");
+      expect(completed.attributes["test.second"]).toBe("accepted");
+      expect(completed.attributes["test.third"]).toBeUndefined();
+      expect(completed.attributes["wide.dropped.attributes"]).toBe(2);
+      expect(completed.attributes["wide.dropped.events"]).toBe(9_997);
+      expect(completed.attributes["wide.dropped.links"]).toBe(9_998);
+      expect(() => Schema.decodeUnknownSync(FlowSpan)(completed)).not.toThrow();
+    }).pipe(Effect.provide(makeTestLayer(undefined, ["test.", "effect."], limits)));
   });
 });
 

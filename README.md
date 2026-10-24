@@ -31,3 +31,11 @@ browser-safe. Applications own authentication, persistence, retention, and domai
 - [Migration guide](docs/migration.md)
 - [Release process](docs/releasing.md)
 - [Repository agent instructions](AGENTS.md)
+
+## Runtime security
+
+Use Node 26.12.1 and Bun 1.4.4, pinned in `.node-version` and `.bun-version`.
+Bun 1.4.4 fixes CVE-2026-111497 in its bundled Brotli decoder. Run
+`bun run audit` for locked dependency advisories; that check complements runtime
+updates. CI and publishing use the same pinned runtimes. The tinypool override
+updates the formatter's exact transitive pin to the fixed 2.1.2 release.
